@@ -5,7 +5,6 @@ g                           the scalar the target reads off W at one candidate
 claim                       (mu_u, mu_v, log var_u, log var_v) at every candidate
 """
 
-import functools
 import json
 from collections import Counter
 from collections.abc import Sequence
@@ -171,7 +170,7 @@ def episode_legs(held: dict[str, Any], config: dict[str, Any]) -> dict[str, np.n
         # a leg that set out already inside the radius had nothing to fly, and one sent past the record's own
         # reach could not have arrived however it was flown: neither says anything about the navigator
         "flown": (apart[ends - taken] > float(method["planner"]["radius"])).astype(float),
-        "unreachable": (apart[ends - taken] > _reach_km(config)).astype(float),
+        "unreachable": (apart[ends - taken] > _reach_km(config, float(held["objective_state/incumbent"][-1]))).astype(float),
     }
 
 
@@ -188,21 +187,20 @@ def _geometry(config: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarra
     return lat, lon, altitude_km
 
 
-@functools.lru_cache(maxsize=4)
-def _fastest(path: str) -> float:
-    """The fastest wind anywhere in a record (m/s), which bounds how far a leg could ever be carried"""
-    with np.load(path) as npz:
-        return float(np.max(np.hypot(npz["u"], npz["v"])))
+def _reach_km(config: dict[str, Any], fastest_flown: float) -> float:
+    """How far a leg could be carried at best: its budget of steps, each of `step_hours`, at `fastest_flown`
 
-
-def _reach_km(config: dict[str, Any]) -> float:
-    """How far a leg could be carried at best: its budget of steps, each of `step_hours`, at the fastest wind
-    the record holds. A waypoint further off than this could not have been reached however well it was flown"""
+    The speed is the fastest wind this episode actually stood in, not the fastest the record holds. The record
+    spans 14.8 to 20.2 km and its maximum is a jet at the bottom of that, pointing wherever it points; a
+    balloon flying a chosen level cannot draw on it, so a bound built from it is vacuous -- at 60 m/s a leg
+    would "reach" 13 000 km and no waypoint would ever be out of range. This bound is still generous, since it
+    grants the whole leg at the best speed seen and in the right direction.
+    """
     method = config.get("method")
     if method is None:
         return float("inf")
     hours = float(method["planner"]["max_steps"]) * float(config["problem"]["step_hours"])
-    return hours * 3600.0 * _fastest(config["problem"]["wind_path"]) / 1000.0
+    return hours * 3600.0 * fastest_flown / 1000.0
 
 
 def _embedded(lat: Any, lon: Any, level: Any, altitude_km: np.ndarray) -> np.ndarray:

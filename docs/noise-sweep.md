@@ -233,8 +233,11 @@ excluded, for different reasons, and both were found in the σ = 2.4 records:
   ends after one move having gone nowhere — and counts as an arrival. Seed 0's first leg: one move, 143 km
   to 143 km. Of nine legs inspected across four seeds, four counted as arrivals and only **one** was a real
   flight to a distant waypoint. Every arrival rate reported before this restriction is inflated this way.
-- **Legs that could not have arrived.** A leg has `L × h = 60 h`; at the fastest wind the record holds that
-  is about 3 700 km. Seed 2 was sent after a waypoint **6 500 km** off and sat flat at that distance for all
+- **Legs that could not have arrived.** A leg has `L × h = 60 h`; at the fastest wind the episode actually
+  flew in (`b_T`, 17 m/s at this level) that is about 3 700 km. The record's own maximum is no use as the
+  speed here — the record reaches down to 14.8 km, where a jet runs at 60 m/s and would put the reach at
+  13 000 km, so no waypoint could ever fail the test. A balloon holding a chosen level cannot draw on a wind
+  at another one. Seed 2 was sent after a waypoint **6 500 km** off and sat flat at that distance for all
   twenty moves, contributing about 250 000 km to `V` by itself — the whole of its heavy tail. These are
   counted as `out of reach` rather than scored.
 
