@@ -68,8 +68,8 @@ NAVIGATION_ONLY: Implementation = {**NAVIGATOR, "resource_weight": 0.0}
 """The paper's solver, its cost the summed distance to the waypoint and nothing else"""
 
 RESOURCES = Resources(
-    cpus=4,
-    mem_gb=16,
+    cpus=1,
+    mem_gb=6,
     timeout_min=60,
     gres=None,
     partition="dean",
@@ -77,8 +77,10 @@ RESOURCES = Resources(
     array_parallelism=12,
 )
 """One cell is about 70 s of flying after a two-minute compile, measured on dean-cpu-01 at sigma = 2.4, so an
-hour is about ten times what a cell needs. The three-arm sweeps carry the oracle and the 32-draw plan, which
-are slower, and still sit far inside it"""
+hour is about ten times what a cell needs. A cell is effectively single-threaded -- eight run serially took
+15 m 29 s of user time against 9 m 55 s of real, most of that the compile -- and peaked at 3.3 GB, so it asks
+for one cpu and 6 GB rather than holding four cores to use one. The three-arm sweeps carry the oracle and the
+32-draw plan, which are slower, and still sit far inside the hour"""
 
 
 def _arms(sigma: float) -> list:
