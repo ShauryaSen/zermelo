@@ -163,9 +163,11 @@ class Resources:
     array_parallelism: int = MISSING
     """Cells of one array allowed to run at once, the rest queueing behind them"""
 
-    account: str = "dean"
-    """Scheduler account the cells are charged to, which is not the partition they run on: a user is
-    associated with accounts, and `sacctmgr show assoc where user=$USER` lists the ones they may charge"""
+    account: str | None = "dean"
+    """Scheduler account the cells are charged to, which is not the partition they run on. None names no
+    account, so the scheduler charges the submitter's default association -- which is what an interactive job
+    does, and what works for anyone not associated with the account named here. A user's associations are
+    listed by `sacctmgr show assoc where user=$USER`"""
 
 
 @dataclass

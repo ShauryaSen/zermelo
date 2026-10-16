@@ -176,14 +176,14 @@ A bound needs **one waypoint sequence shared by all three arms**, so that the na
 that differs. That is a change to how an arm is composed, not a sweep, and it is the separate experiment.
 The arms below are left defined and unregistered, ready for it.
 
-`SEEDS = range(32)`; resources are 4 cpus, 16 GB, 60 min, partition `dean`, account `dean`.
+`SEEDS = range(32)`; resources are 1 cpu, 6 GB, 60 min, partition `dean`, and **no account named**.
 
 **The account is not the partition.** `partition=dean` is what keeps the cells on `dean-compute-[01-02]` and
-`dean-cpu-01`; the account is only who the time is charged to. `sbatch` refuses a submission whose account
-the user is not associated with, as *Invalid account or account/partition combination* -- which names the
-account first for a reason. The account is now a field of the sweep's `resources` so it can be stated rather
-than assumed, but it stays `dean`: that is the right account for this work, and a user who cannot charge it
-needs the association, not a different account. Measured on `dean-cpu-01`, the
+`dean-cpu-01`. The account is only who the time is charged to, and `sbatch` refuses a submission naming an
+account the submitter is not associated with -- *Invalid account or account/partition combination*, which
+puts the account first for a reason. The launcher used to demand `--account=dean`, which only some of us can
+charge. `account=None` names no account at all, so the scheduler uses the submitter's own default
+association, exactly as an interactive job on this partition already does. It works for everyone. Measured on `dean-cpu-01`, the
 eight seeds of `mpc_noise_s24` take **9 m 55 s end to end in one process** — a two-minute JAX compile and
 about 70 s a seed — so as a Slurm array the whole ladder finishes in minutes.
 
