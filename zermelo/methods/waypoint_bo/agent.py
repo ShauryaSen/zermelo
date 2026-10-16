@@ -284,3 +284,46 @@ class GradientAgent(WaypointAgent):
         plan = self.navigator.plan(k_plan, self.dynamics, self.positions, fields, here, self._target(scores.waypoint), plan)
         carried = jnp.concatenate([plan[1:], plan[-1:]])  # what is left of the plan once its first climb is flown
         return GradientAgentState(belief, scores, carried, steps, taken, claim), Decision(plan[0], claim)
+
+
+@dataclass(frozen=True, kw_only=True)
+class OpenLoopAgent(GradientAgent):
+    """`GradientAgent` that solves once a leg and then flies what it solved, never replanning
+
+    The value of the best fixed plan, which is what a controller earns when it cannot react. Everything else
+    is the gradient agent's: the same waypoints, the same solver, the same winds. Only the moment of solving
+    differs -- here it is the first move of a leg, there it is every move.
+
+    Flown under `OracleBelief` this is the hindsight bound instead: the plan is solved on the wind the balloon
+    will actually meet, and with the dynamics deterministic given that wind no policy can beat the best plan
+    for it.
+    """
+
+    def decide(  # type: ignore[override]
+        self, key: PRNGKeyArray, agent_state: GradientAgentState, obs: Observation
+    ) -> tuple[GradientAgentState, Decision]:
+        """As `GradientAgent`, except that a standing plan is flown out rather than solved again"""
+        k_draw, k_score, k_winds, k_plan = jax.random.split(key, 4)
+        planner = self.acquisition.planner
+        z, belief = self._fold_reading(agent_state.belief, obs)
+        context = self._context(obs)
+        claim = posterior_moments(belief, context) if int(agent_state.steps_taken) % self.claim_every == 0 else agent_state.claim
+        taken = agent_state.steps_taken + 1
+        if int(agent_state.steps_taken) < planner.max_steps * self.opening_legs:
+            state = GradientAgentState(belief, agent_state.scores, agent_state.plan, agent_state.steps_since_waypoint, taken, claim)
+            return state, Decision(Uniform().sample(obs.legal_actions, k_draw), claim)
+        here = self._here(obs)
+        where = self._space.embed({"position": here["position"], "altitude": here["altitude"]})
+        budget_spent = agent_state.steps_since_waypoint >= planner.max_steps
+        arrived = jnp.linalg.norm(where - self._target(agent_state.scores.waypoint)) <= planner.radius
+        opening = bool(budget_spent | arrived)
+        if opening:
+            scores = self.acquisition.choose(k_score, belief, self.transition, z, self._pricing_actions(), self.candidates, context)
+            plan, steps = jnp.zeros_like(agent_state.plan), jnp.zeros((), jnp.int32)
+        else:
+            scores, plan, steps = agent_state.scores, agent_state.plan, agent_state.steps_since_waypoint + 1
+        if opening:  # the one solve of this leg, on the winds the leg's waypoint was scored under
+            fields = self._winds(k_winds, belief, context)
+            plan = self.navigator.plan(k_plan, self.dynamics, self.positions, fields, here, self._target(scores.waypoint), plan)
+        carried = jnp.concatenate([plan[1:], plan[-1:]])  # the plan less the climb being flown
+        return GradientAgentState(belief, scores, carried, steps, taken, claim), Decision(plan[0], claim)

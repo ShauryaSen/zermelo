@@ -37,6 +37,11 @@ WIND_COMPONENTS = 2
 """(u, v): what a belief over the wind is wide in"""
 
 
+_FORECAST_DRAW = 0xF0EC
+"""Folded into the world's key for a `noisy` forecast, so the error drawn over the forecast is this seed's
+own and never the same stream the world resets on"""
+
+
 def assemble(cfg: RunConfig) -> Episode:
     """The episode one configuration describes, that configuration carried onto its record"""
     k_world, k_agent, k_steps = jax.random.split(jax.random.key(cfg.seed), 3)
@@ -47,13 +52,19 @@ def assemble(cfg: RunConfig) -> Episode:
     truth, predicted = over if is_drifting else tuple(window[0] for window in over)  # (t, alt, pos, uv), or one frame held still
     hours: Float[Array, " t"] | None = held_at if is_drifting else None
     error: WindError
+    drawn = GaussianError(
+        length_scale_km=cfg.problem.error_lengthscale_km, amplitude_ms=cfg.problem.error_scale, jitter=cfg.problem.error_jitter
+    )
     if cfg.problem.forecast == "GEFS":
         error = GEFSError(truth - predicted)  # W - F at every hour the window holds
+    elif cfg.problem.forecast == "noisy":
+        # the truth is the record's own and stays so; the forecast is it under a drawn error, and the error the
+        # world carries is exactly what that took away, so W = F + e is the record again at every error scale
+        predicted = truth - drawn.sample(jax.random.fold_in(k_world, _FORECAST_DRAW), grid, n_alt)
+        error = GEFSError(truth - predicted)
     else:  # W is the forecast, so the drawn error is what makes them differ
         predicted = truth
-        error = GaussianError(
-            length_scale_km=cfg.problem.error_lengthscale_km, amplitude_ms=cfg.problem.error_scale, jitter=cfg.problem.error_jitter
-        )
+        error = drawn
     states = balloon_states(grid, tuple(float(h) for h in recording.altitude_km))
     transition = balloon_transition(recording, states, cfg.problem.step_hours)  # the grid's law: the world's, or the trip pricing
     dynamics = smooth_transition(recording, states, cfg.problem.step_hours, cfg.problem.climb_cap_km) if cfg.problem.continuous else None

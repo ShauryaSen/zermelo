@@ -19,8 +19,10 @@ class ProblemConfig:
     frames: int = MISSING
     """How many hours of the record the episode runs over, one holding W and F still"""
 
-    forecast: Literal["GEFS", "gaussian"] = MISSING
-    """F = the forecast the record holds, or W itself under a drawn error"""
+    forecast: Literal["GEFS", "gaussian", "noisy"] = MISSING
+    """F = the forecast the record holds, or W itself under a drawn error, or W under a drawn error the
+    forecast carries instead: `noisy` leaves the truth the record's own at every error scale, so a sweep over
+    `error_scale` moves what the balloon believes and not the wind it flies in"""
 
     resource_units: int = MISSING
     """`r_0`: altitude changes the balloon can afford over the whole episode"""
