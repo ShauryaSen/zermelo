@@ -13,17 +13,11 @@ class ProblemConfig:
     wind_path: str = MISSING
     """Where the wind is read from, relative to the package"""
 
-    grid_stride: int = MISSING
-    """Every how many of the data's rows and columns the grid keeps, 1 keeping all"""
+    frame: int = MISSING
+    """Which hour of the record the episode starts at, taking W and F from there"""
 
-    hour_stride: int = MISSING
-    """Every how many of the data's frames the episode may read, 1 keeping all"""
-
-    start_hour: float = MISSING
-    """The data's hour the episode begins at"""
-
-    time_varying: bool = MISSING
-    """Whether W and F move with hours_elapsed, or stay as they are at `start_hour`"""
+    frames: int = MISSING
+    """How many hours of the record the episode runs over, one holding W and F still"""
 
     forecast: Literal["GEFS", "gaussian"] = MISSING
     """F = the forecast the record holds, or W itself under a drawn error"""
@@ -32,7 +26,7 @@ class ProblemConfig:
     """`r_0`: altitude changes the balloon can afford over the whole episode"""
 
     step_hours: float = MISSING
-    """Hours in one time_step"""
+    """`h`: hours the wind carries the balloon for in one step"""
 
     error_scale: float = MISSING
     """Standard deviation of a drawn error (m/s)"""
@@ -43,14 +37,23 @@ class ProblemConfig:
     error_jitter: float = MISSING
     """Added to a drawn error's correlation diagonal so it factorises"""
 
+    readout: str = MISSING
+    """Dotted path to what the balloon measures of the wind"""
+
     target: Any = MISSING
     """Which scalar of the wind the episode is scored on predicting, as a dotted path with its own arguments"""
 
-    lat_min: float = MISSING
-    lat_max: float = MISSING
-    lon_min: float = MISSING
-    lon_max: float = MISSING
-    """The box of grid points, in degrees, the candidates sit above"""
+    margin_lat: int = MISSING
+    """Rows at each edge of the grid that no candidate sits in"""
+
+    margin_lon: int = MISSING
+    """Columns at each edge of the grid that no candidate sits in"""
+
+    continuous: bool = False
+    """Whether the balloon has real coordinates and a climb for an action, or sits on cells and levels"""
+
+    climb_cap_km: float = 0.0
+    """`c`: the most a continuous balloon climbs or descends in one step (unread on the grid)"""
 
 
 @dataclass
@@ -77,14 +80,14 @@ class BeliefConfig:
     kernel_factors: list[BeliefKernelConfig] = MISSING
     """The factors the kernel is a product of"""
 
-    forecast_as_prior_mean: bool = MISSING
-    """Whether the belief learns the wind about the forecast, or about zero"""
-
     amplitude: float = MISSING
-    """Standard deviation the belief assumes of what it learns"""
+    """How wrong the method assumes the forecast is, as a standard deviation"""
 
     noise: float = MISSING
     """Standard deviation the method assumes a reading has"""
+
+    forecast_prior: bool = MISSING
+    """Whether the forecast is the belief's mean before any reading, or zero is"""
 
     n_features: int = MISSING
     refit: bool = MISSING
@@ -124,8 +127,11 @@ class MethodConfig:
     n_candidates: int | None = MISSING
     """Cap on candidates scored per move (None scores every one)"""
 
-    opening_steps: int = MISSING
-    """time_steps of uniform random walking taken before the rule starts"""
+    opening_legs: int = MISSING
+    """Waypoint legs of uniform random walking taken before the rule starts"""
+
+    navigator: Any | None = None
+    """How a continuous balloon flies a leg, as a dotted path with its own arguments (None flies the planner's table on the grid)"""
 
 
 @dataclass
@@ -143,7 +149,7 @@ class Resources:
     """Generic resources a cell asks the scheduler for, such as `gpu:1` (None asks for none)"""
 
     partition: str = MISSING
-    """Scheduler partition the runs are submitted to"""
+    """Scheduler partition the cells are submitted to"""
 
     constraint: str | None = MISSING
     """Node features a cell demands of the scheduler, joined by `&` and `|` (None demands none)"""
@@ -176,7 +182,7 @@ class RunConfig:
     """What the record stores, and the moves between the snapshots it keeps of each"""
 
     resources: Resources = MISSING
-    """What the run was given, carried onto the record"""
+    """What the cell was given, carried onto the record"""
 
     seed: int = MISSING
     """The one number an episode replays from"""

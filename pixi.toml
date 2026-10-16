@@ -23,7 +23,7 @@ description = "Validate one of our implementations against the library it is che
 [tasks.sweep]
 args = ["experiment", "name"]
 cmd = "python -m zermelo.experiments.{{ experiment }} +sweep={{ name }}"
-description = "Run every run of one sweep, one after another, in this process"
+description = "Run every cell of one sweep, one after another, in this process"
 
 [tasks.submit]
 args = ["experiment", "name"]
@@ -88,7 +88,7 @@ omegaconf = "==2.4.0.dev15"        # pinned explicitly: a range alone will not r
 [feature.cuda.tasks.smoke-gpu]
 args = ["experiment"]
 cmd = "python -m zermelo.experiments.{{ experiment }} +sweep=smoke_gpu hydra/launcher=slurm"
-description = "Submit the smoke runs to a gpu node as a Slurm array, then draw the launch directory it prints"
+description = "Submit the smoke cells to a gpu node as a Slurm array, then draw the launch directory it prints"
 
 # The accelerator wheels; `default` runs on the processor
 [feature.cuda.pypi-dependencies]

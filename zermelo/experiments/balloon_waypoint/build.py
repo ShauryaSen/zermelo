@@ -7,23 +7,26 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 from hydra.utils import get_class, instantiate
+from jaxtyping import Array, Float
 
 from zermelo.experiments.balloon_waypoint.schema import RunConfig
 from zermelo.interface import Agent
 from zermelo.methods.random_agent import RandomAgent
 from zermelo.methods.waypoint_bo.acquisition import Acquisition
-from zermelo.methods.waypoint_bo.agent import WaypointAgent, posterior_moments
+from zermelo.methods.waypoint_bo.agent import GradientAgent, WaypointAgent, posterior_moments
 from zermelo.methods.waypoint_bo.belief import BeliefKernel, GPBelief, OracleBelief
 from zermelo.problems.balloon import (
     GaussianError,
     GEFSError,
+    GridWind,
     WindError,
     balloon_objective,
     balloon_states,
     balloon_transition,
     balloon_world,
-    candidate_box,
     load_wind,
+    smooth_transition,
+    smoothed,
 )
 from zermelo.run.episode import Episode
 
@@ -37,30 +40,41 @@ WIND_COMPONENTS = 2
 def assemble(cfg: RunConfig) -> Episode:
     """The episode one configuration describes, that configuration carried onto its record"""
     k_world, k_agent, k_steps = jax.random.split(jax.random.key(cfg.seed), 3)
-    wind_data = load_wind(Path(__file__).resolve().parents[3] / cfg.problem.wind_path, cfg.problem.grid_stride, cfg.problem.hour_stride)
-    grid = wind_data.grid
-    # (frames, alt, pos, uv) twice, and the hours_elapsed each frame stands for; one frame where the wind is held still
-    truth, predicted, frame_hours_elapsed = wind_data.frames_from(
-        cfg.problem.start_hour, cfg.horizon * cfg.problem.step_hours, cfg.problem.time_varying
-    )
+    recording = load_wind(Path(__file__).resolve().parents[3] / cfg.problem.wind_path)
+    grid, n_alt = recording.grid, recording.n_alt
+    is_drifting = cfg.problem.frames > 1
+    over, held_at = recording.window(slice(cfg.problem.frame, cfg.problem.frame + cfg.problem.frames))
+    truth, predicted = over if is_drifting else tuple(window[0] for window in over)  # (t, alt, pos, uv), or one frame held still
+    hours: Float[Array, " t"] | None = held_at if is_drifting else None
     error: WindError
     if cfg.problem.forecast == "GEFS":
-        error = GEFSError(truth - predicted)  # W - F at every frame the episode reads
+        error = GEFSError(truth - predicted)  # W - F at every hour the window holds
     else:  # W is the forecast, so the drawn error is what makes them differ
         predicted = truth
         error = GaussianError(
             length_scale_km=cfg.problem.error_lengthscale_km, amplitude_ms=cfg.problem.error_scale, jitter=cfg.problem.error_jitter
         )
-    states = balloon_states(grid, tuple(float(h) for h in wind_data.altitude_km))
-    transition = balloon_transition(wind_data, states, cfg.problem.step_hours)
-    box = candidate_box(grid, cfg.problem.lat_min, cfg.problem.lat_max, cfg.problem.lon_min, cfg.problem.lon_max)
-    centre = jnp.array([(cfg.problem.lat_min + cfg.problem.lat_max) / 2, (cfg.problem.lon_min + cfg.problem.lon_max) / 2])
-    start_box = jnp.arange(grid.size()) == jnp.argmin(
-        jnp.sum((grid.elements() - centre) ** 2, axis=-1)
-    )  # the grid point nearest the box centre
-    world = balloon_world(grid, states, predicted, frame_hours_elapsed, error, transition, cfg.problem.resource_units, start_box)
-    objective = balloon_objective(states, grid, instantiate(cfg.problem.target, _target_whitelist_=WHITELIST), box)
+    states = balloon_states(grid, tuple(float(h) for h in recording.altitude_km))
+    transition = balloon_transition(recording, states, cfg.problem.step_hours)  # the grid's law: the world's, or the trip pricing
+    dynamics = smooth_transition(recording, states, cfg.problem.step_hours, cfg.problem.climb_cap_km) if cfg.problem.continuous else None
+    world = balloon_world(
+        recording,
+        states,
+        forecast=predicted,
+        error=error,
+        transition=transition if dynamics is None else dynamics,
+        continuous=cfg.problem.continuous,
+        readout=get_class(cfg.problem.readout),
+        resource_units=cfg.problem.resource_units,
+        margin_lat=cfg.problem.margin_lat,
+        margin_lon=cfg.problem.margin_lon,
+        hours=hours,
+    )
+    objective = balloon_objective(
+        recording, states, instantiate(cfg.problem.target, _target_whitelist_=WHITELIST), cfg.problem.margin_lat, cfg.problem.margin_lon
+    )
     candidates = objective.candidates
+    forecast = GridWind(predicted[0] if is_drifting else predicted, grid)
     context = world.readout.context
     belief = (
         # the wind of the world the episode runs in, drawn on its key
@@ -78,15 +92,27 @@ def assemble(cfg: RunConfig) -> Episode:
             n_features=cfg.belief.n_features,
             refit=cfg.belief.refit,
             refit_steps=cfg.belief.refit_steps,
-            prior_mean=None,  # the forecast the reading carries, set at the first reading
+            prior_mean=forecast if cfg.belief.forecast_prior else None,
         )
     )
     agent: Agent[Any]
     if cfg.method is None:
         # no rule and no update: it claims the prior every step
         agent = RandomAgent(claim=posterior_moments(belief, jnp.zeros(sum(context.values()))))
+    elif (dynamics is None) != (cfg.method.navigator is None):
+        raise ValueError("a continuous balloon needs a navigator, and a balloon on the grid cannot use one")
     else:
-        agent = WaypointAgent(
+        flown = (
+            {}
+            if dynamics is None
+            else dict(
+                dynamics=dynamics,
+                navigator=instantiate(cfg.method.navigator, _target_whitelist_=WHITELIST),
+                interpolate=lambda table: smoothed(table, grid, n_alt),
+            )
+        )
+        agent = (WaypointAgent if dynamics is None else GradientAgent)(
+            **flown,
             candidates=candidates,
             transition=transition,
             belief=belief,
@@ -104,9 +130,8 @@ def assemble(cfg: RunConfig) -> Episode:
             position_key="position",
             reading_key="wind",
             context_key="context",
-            prior_mean_key="forecast" if cfg.belief.forecast_as_prior_mean else None,
             horizon=cfg.horizon,
-            opening_steps=cfg.method.opening_steps,
+            opening_legs=cfg.method.opening_legs,
             claim_every=cfg.claim_every,
         )
     # the settings as plain data, carried onto the record

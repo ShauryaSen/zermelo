@@ -1,57 +1,76 @@
-"""A balloon drifts in an unknown wind around the globe, steering only by which altitude it flies at.
+"""A balloon drifts in an unknown wind, steering only by which altitude it flies at.
 
-state = (position, altitude, balloon_resource, hours_elapsed, field)
-    position            (lat, lon) degrees of the grid point the balloon is over
-    altitude            which altitude, an index
-    balloon_resource    altitude changes left
-    hours_elapsed       hours since the episode began
-    field               W, the wind carrying it: W(position, altitude, hours_elapsed) = (u, v) in m/s
-action in {0, 1, 2}     down one altitude, hold, up one
+s = (lat, lon, p, r, W)             where it is, which altitude, what resource is left, the wind carrying it
+a in {0, 1, 2}                      down one altitude, hold, up one
+W(lat, lon, p) = (u, v)             wind in m/s, u eastward and v northward
+(lat, lon)' = (lat, lon) + W(s) h   the wind carries it, h hours to a step
+p' = p + a - 1, r' = r - |p' - p|   an altitude change spends one unit of resource, and needs r > 0
+W = F + e                           the truth is the forecast F the agent is given, plus the error it carries
 
-position'         ~ the grid points around a great-circle step from position along W, step_hours long
-altitude'         = altitude + action - 1, where balloon_resource > 0
-balloon_resource' = balloon_resource - |altitude' - altitude|
-hours_elapsed'    = hours_elapsed + step_hours
-W = F + forecast_error          the truth is the forecast F the balloon is given, plus the error it carries
-reward = ||W(state)||           counted on a candidate, a latitude-longitude box at every altitude
+A plan and a belief are written over (lat, lon, p) alone; r is a scalar the world carries and the
+method prices.
 
-A plan and a belief are written over (position, altitude) alone
+Continuous (`SmoothBalloonTransition`): lat, lon and p are real, a is a climb in km, and W is read between records
 """
 
-from zermelo.problems.balloon.field import ForecastPrior, GaussianError, GEFSError, TimeVaryingWind, WindError, WindField
+from zermelo.problems.balloon.field import (
+    DriftingWind,
+    ForecastPrior,
+    GaussianError,
+    GEFSError,
+    GridWind,
+    SmoothWind,
+    WindError,
+    WindField,
+    smoothed,
+)
 from zermelo.problems.balloon.grid import SphereGrid, Steps, balloon_states
-from zermelo.problems.balloon.objective import ColumnPeakSpeed, PointSpeed, StormSearch, Target, balloon_candidates, candidate_box
-from zermelo.problems.balloon.readout import PointWind
-from zermelo.problems.balloon.transition import Act, Advection, Ascent, BalloonKernel, BalloonTransition, Factor
-from zermelo.problems.balloon.world import Highest, WindData, balloon_objective, balloon_transition, balloon_world, load_wind
+from zermelo.problems.balloon.objective import ColumnPeakSpeed, PointSpeed, StormSearch, Target, balloon_candidates
+from zermelo.problems.balloon.readout import BalloonReadout, ColumnWind, PointWind
+from zermelo.problems.balloon.transition import Act, Advection, Ascent, BalloonKernel, BalloonTransition, Factor, SmoothBalloonTransition
+from zermelo.problems.balloon.world import (
+    Highest,
+    WindRecord,
+    balloon_objective,
+    balloon_transition,
+    balloon_world,
+    load_wind,
+    smooth_transition,
+)
 
 __all__ = [
     "Act",
     "Advection",
     "Ascent",
     "BalloonKernel",
+    "BalloonReadout",
     "BalloonTransition",
     "ColumnPeakSpeed",
+    "ColumnWind",
+    "DriftingWind",
     "Factor",
     "ForecastPrior",
     "GEFSError",
     "GaussianError",
+    "GridWind",
     "Highest",
     "PointSpeed",
     "PointWind",
+    "SmoothBalloonTransition",
+    "SmoothWind",
     "SphereGrid",
     "Steps",
     "StormSearch",
     "Target",
-    "TimeVaryingWind",
-    "WindData",
     "WindError",
     "WindField",
+    "WindRecord",
     "balloon_candidates",
     "balloon_objective",
     "balloon_states",
     "balloon_transition",
     "balloon_world",
-    "candidate_box",
     "load_wind",
+    "smooth_transition",
+    "smoothed",
 ]

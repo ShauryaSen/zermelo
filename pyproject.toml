@@ -8,7 +8,7 @@ disallow_untyped_defs = true
 
 # gpjax ships no `py.typed` marker, so mypy reports the import itself as an error
 [[tool.mypy.overrides]]
-module = ["gpjax.*", "cmocean.*", "cartopy.*"]
+module = ["gpjax.*", "optax.*", "cmocean.*", "cartopy.*"]
 ignore_missing_imports = true
 
 [tool.ruff]

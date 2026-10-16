@@ -8,16 +8,16 @@ from jaxtyping import Bool, Float, Int
 
 from zermelo.experiments.balloon_waypoint.metrics.data import (
     CURVE_CHANNELS,
-    acquisition_label,
     at_each_snapshot,
     channels,
     claimed_speed,
     episode_curves,
     opening_moves,
+    rule,
     settings,
 )
 from zermelo.problems.balloon.grid import balloon_states
-from zermelo.problems.balloon.objective import balloon_candidates, candidate_box
+from zermelo.problems.balloon.objective import balloon_candidates
 from zermelo.problems.balloon.world import load_wind
 from zermelo.run.record import Record
 
@@ -69,26 +69,11 @@ class Replay:
     altitude_km: tuple[float, ...]
     """What each altitude index stands for, in km"""
 
-    latitude: Float[np.ndarray, " lat"]
-    """Latitude of every grid row, in degrees"""
+    wind: Float[np.ndarray, "alt lat lon uv"]
+    """W at every altitude and cell, as (u, v) in m/s"""
 
-    longitude: Float[np.ndarray, " lon"]
-    """Longitude of every grid column, in degrees"""
-
-    box: tuple[float, float, float, float]
-    """(lat_min, lat_max, lon_min, lon_max) of the candidates, in degrees"""
-
-    wind: Float[np.ndarray, "frames alt lat lon uv"]
-    """W at every frame the episode read, altitude and cell, as (u, v) in m/s"""
-
-    speed: Float[np.ndarray, "frames alt lat lon"]
+    speed: Float[np.ndarray, "alt lat lon"]
     """||W|| there"""
-
-    frame_hours: Float[np.ndarray, " frames"]
-    """hours_elapsed each frame stands for"""
-
-    hours: Float[np.ndarray, " snapshots"]
-    """hours_elapsed at every snapshot"""
 
     prior_sd: float
     """Standard deviation the belief started at, the top of the uncertainty raster's range"""
@@ -111,30 +96,26 @@ class Replay:
     path: Float[np.ndarray, "snapshots 2"]
     """Where the balloon truly was, as (lat, lon) in degrees"""
 
-    flown: Int[np.ndarray, " snapshots"]
-    """The altitude it flew at"""
+    flown: Float[np.ndarray, " snapshots"]
+    """The altitude it flew at, as a level: whole on the grid, fractional for a continuous balloon"""
 
     balloon_resource: Int[np.ndarray, " snapshots"]
     """What it had left to spend"""
 
-    truth: Float[np.ndarray, "snapshots n_candidates"]
-    """||W|| at every candidate, at the hour of each snapshot"""
+    truth: Float[np.ndarray, " n_candidates"]
+    """g at every candidate, the same at every move"""
 
     claim: Float[np.ndarray, "snapshots n_candidates 4"]
     """What was claimed there: the mean of (u, v), then their log-variances, NaN at the first snapshot"""
 
     seconds: Float[np.ndarray, " moves"]
-    bytes_held: Float[np.ndarray, " moves"]
+    bytes_held: Int[np.ndarray, " moves"]
 
     plan: Plan | None
     """Absent from an arm with no rule"""
 
     curves: dict[str, Float[np.ndarray, " moves"]]
     """Every quantity this episode is scored by, one value per move"""
-
-    def frame_at(self, move: int) -> int:
-        """The frame the wind was read from at `move`: the one whose hours_elapsed is nearest"""
-        return int(np.argmin(np.abs(self.frame_hours - self.hours[min(move, self.hours.size - 1)])))
 
     def raster(self, name: str, move: int) -> Float[np.ndarray, "lat lon"]:
         """One named quantity laid on the grid at `move`, at the altitude being flown, NaN wherever it is not defined"""
@@ -156,8 +137,7 @@ class Replay:
             frame[self.cell[seen[kept], 0], self.cell[seen[kept], 1]] = value[kept]
             return frame
         speed, spread = claimed_speed(self.claim[move])  # (n_candidates,) each
-        truth = self.truth[min(move, self.truth.shape[0] - 1)]
-        value = {"truth": truth, "belief": speed, "uncertainty": spread, "error": np.abs(speed - truth)}[name]
+        value = {"truth": self.truth, "belief": speed, "uncertainty": spread, "error": np.abs(speed - self.truth)}[name]
         frame = np.full(self.shape, np.nan, np.float32)
         frame[self.cell[at_level, 0], self.cell[at_level, 1]] = value[at_level]
         return frame
@@ -193,7 +173,7 @@ class Replay:
         return chosen[np.linspace(0, chosen.size - 1, min(count, chosen.size)).round().astype(int)]
 
 
-def runs(launch: Path, *, seed: str | None = None, arm: str | None = None) -> list[Path]:
+def cells(launch: Path, *, seed: str | None = None, arm: str | None = None) -> list[Path]:
     """The directories under `launch`, one per episode, kept to one seed or one arm where asked and sorted by name"""
     found = sorted(path.parent for path in launch.glob("*/record.npz"))
     if seed is None and arm is None:  # many seeds of many arms is a sheet nobody reads: one axis is held by default
@@ -201,7 +181,7 @@ def runs(launch: Path, *, seed: str | None = None, arm: str | None = None) -> li
         seed = seeds[0] if len(seeds) > 1 else None
     kept = [path for path in found if seed in (None, settings(path.name).get("seed")) and arm in (None, settings(path.name).get("arm"))]
     if not kept:
-        raise ValueError(f"{launch} holds no run at seed {seed} of arm {arm}; it holds {[path.name for path in found]}")
+        raise ValueError(f"{launch} holds no cell at seed {seed} of arm {arm}; it holds {[path.name for path in found]}")
     return kept
 
 
@@ -209,22 +189,17 @@ def read(path: Path) -> Replay:
     """The episode recorded in the directory at `path`, on the world its own configuration describes"""
     record = Record.load(path)
     problem, method, belief = record.config["problem"], record.config["method"], record.config["belief"]
-    wind_data = load_wind(Path(problem["wind_path"]), int(problem["grid_stride"]), int(problem["hour_stride"]))
-    grid, n_alt = wind_data.grid, wind_data.n_alt
-    altitude_km = tuple(float(km) for km in np.asarray(wind_data.altitude_km))
-    horizon = int(record.reward.shape[0])
-    frames, _, frame_hours = wind_data.frames_from(
-        float(problem["start_hour"]), horizon * float(problem["step_hours"]), bool(problem["time_varying"])
-    )
-    wind = np.asarray(frames).reshape(frames.shape[0], n_alt, grid.n_lat, grid.n_lon, 2)
+    recording = load_wind(Path(problem["wind_path"]))
+    grid, n_alt = recording.grid, recording.n_alt
+    altitude_km = tuple(float(km) for km in np.asarray(recording.altitude_km))
+    wind = np.asarray(recording.at(int(problem["frame"]))).reshape(n_alt, grid.n_lat, grid.n_lon, 2)
 
     states = balloon_states(grid, altitude_km)
-    box = candidate_box(grid, float(problem["lat_min"]), float(problem["lat_max"]), float(problem["lon_min"]), float(problem["lon_max"]))
-    candidates = balloon_candidates(states, grid, box)
+    candidates = balloon_candidates(states, grid, int(problem["margin_lat"]), int(problem["margin_lon"]))
     live = np.flatnonzero(np.asarray(candidates.live))  # (n_candidates,) indices into the state domain
     element = states.elements()
     position = np.asarray(element["position"])[live]  # (n_candidates, 2) degrees
-    cell = np.asarray(grid.row_col_of(element["position"]))[live]  # (n_candidates, 2) row and column
+    cell = np.asarray(grid.cell_of(element["position"]))[live]  # (n_candidates, 2) row and column
     level = np.asarray(element["altitude"])[live].astype(int)
     outside = np.ones((grid.n_lat, grid.n_lon), bool)
     outside[cell[:, 0], cell[:, 1]] = False  # every scored cell is inside the margin
@@ -232,7 +207,7 @@ def read(path: Path) -> Replay:
     snapshots = int(record.reward.shape[0]) + 1
     claim = at_each_snapshot(np.asarray(record.objective_state["claim"]), snapshots, int(record.config["claim_every"])).copy()
     claim[0] = np.nan  # the objective opens with zeros in the shape of a claim, which is not one
-    flown = np.asarray(record.state["altitude"]).astype(int)
+    flown = np.asarray(record.state["altitude"]).astype(float)
 
     index = np.asarray(record.agent_state["scores.waypoint"]) if method is not None else np.zeros(0, int)
     replans = 1 + np.flatnonzero(np.diff(index))  # snapshots at which a new waypoint took force
@@ -255,7 +230,7 @@ def read(path: Path) -> Replay:
     lat_edges = (float(np.min(position[:, 0])), float(np.max(position[:, 0])))
     return Replay(
         name=path.name,
-        label=acquisition_label(settings(path.name).get("arm", path.name)),
+        label=rule(settings(path.name).get("arm", path.name)),
         n_moves=int(record.reward.shape[0]),
         shape=(grid.n_lat, grid.n_lon),
         extent=(
@@ -266,23 +241,18 @@ def read(path: Path) -> Replay:
         ),
         aspect=1.0 / float(np.cos(np.radians(0.5 * (lat_edges[0] + lat_edges[1])))),
         altitude_km=altitude_km,
-        latitude=grid.lat_first + grid.lat_step * np.arange(grid.n_lat),
-        longitude=grid.lon_first + grid.lon_step * np.arange(grid.n_lon),
-        box=(lat_edges[0], lat_edges[1], float(np.min(position[:, 1])), float(np.max(position[:, 1]))),
         wind=wind,
         speed=np.linalg.norm(wind, axis=-1),
-        frame_hours=np.asarray(frame_hours),
-        hours=np.asarray(record.state["hours_elapsed"]),
         prior_sd=float(belief["amplitude"]) if float(belief["amplitude"]) > 0.0 else 1.0,
         cell=cell,
         level=level,
         index=live,
         outside=outside,
-        leg=int(method["planner"]["replan_every"]) if method is not None else int(record.reward.shape[0]),
+        leg=int(method["planner"]["max_steps"]) if method is not None else int(record.reward.shape[0]),
         path=np.asarray(record.state["position"]),
         flown=flown,
         balloon_resource=np.asarray(record.state["balloon_resource"]).astype(int),
-        truth=np.asarray(record.objective_state["truth"]),
+        truth=np.asarray(record.objective_state["truth"])[0],
         claim=claim,
         seconds=np.asarray(record.time_per_decision),
         bytes_held=np.asarray(record.memory_per_decision),

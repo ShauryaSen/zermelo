@@ -16,7 +16,7 @@ class AmbientObjective(Objective[dict[str, Float[Array, "..."]]]):
     """Reward is the increment max(0, ||f*(z')|| - beta_n), with the truth and the claim recorded beside it"""
 
     candidates: Subset[dict[str, Any]]
-    """Where a sample on_candidate, a waypoint may be aimed and a claim is scored"""
+    """Where a sample counts, a waypoint may be aimed and a claim is scored"""
 
     scored: dict[str, Any] = dataclasses.field(init=False, repr=False)
     """The candidate positions, gathered once"""
@@ -44,10 +44,10 @@ class AmbientObjective(Objective[dict[str, Float[Array, "..."]]]):
     def reset(self, state: dict[str, Any]) -> dict[str, Float[Array, "..."]]:
         """The objective's memory at step zero"""
         truth = state["field"](self.scored)  # (n_scored, ambient_axes)
-        magnitude, on_candidate = self._magnitude(state)
+        magnitude, counts = self._magnitude(state)
         return {
-            "best_observed_magnitude": jnp.where(on_candidate, magnitude, 0.0),  # the start's own norm where it is a candidate, else 0
-            "best_possible_magnitude": jnp.max(jnp.linalg.norm(truth, axis=-1)),
+            "incumbent": jnp.where(counts, magnitude, 0.0),  # the start's own norm where it is a candidate, else 0
+            "oracle": jnp.max(jnp.linalg.norm(truth, axis=-1)),
             "truth": truth,
             "claim": jnp.zeros((truth.shape[0], 2 * self.ambient_axes)),  # (n_scored, 2 * ambient_axes): nothing claimed yet
         }
@@ -55,11 +55,11 @@ class AmbientObjective(Objective[dict[str, Float[Array, "..."]]]):
     def score(
         self, objective_state: dict[str, Float[Array, "..."]], state: dict[str, Any], decision: Decision, next_state: dict[str, Any]
     ) -> tuple[dict[str, Float[Array, "..."]], Float[Array, ""]]:
-        """What the arrival improved on the best_observed_magnitude at a candidate, and the claim as it stood"""
-        magnitude, on_candidate = self._magnitude(next_state)
-        best_observed_magnitude = objective_state["best_observed_magnitude"]
+        """What the arrival improved on the incumbent at a candidate, and the claim as it stood"""
+        magnitude, counts = self._magnitude(next_state)
+        incumbent = objective_state["incumbent"]
         carried = objective_state | {
-            "best_observed_magnitude": jnp.where(on_candidate, jnp.maximum(best_observed_magnitude, magnitude), best_observed_magnitude),
+            "incumbent": jnp.where(counts, jnp.maximum(incumbent, magnitude), incumbent),
             "claim": decision.claim(self.scored),  # (n_scored, 2 * ambient_axes): the means, then the log-variances
         }
-        return carried, jnp.where(on_candidate, jnp.maximum(magnitude - best_observed_magnitude, 0.0), 0.0)
+        return carried, jnp.where(counts, jnp.maximum(magnitude - incumbent, 0.0), 0.0)

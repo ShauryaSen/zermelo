@@ -35,7 +35,7 @@ class Record:
     time_per_decision: Float[Array, " T"]
     """Seconds inside `decide`, measured once the result landed"""
 
-    memory_per_decision: Float[Array, " T"]
+    memory_per_decision: Int[Array, " T"]
     """Bytes of every live jax array in the process once a decision completed"""
 
     config: dict[str, Any]
@@ -94,7 +94,7 @@ class Record:
             decision=blocks["decision"],
             reward=jnp.asarray(plain["reward"]),
             time_per_decision=jnp.asarray(plain["time_per_decision"]),
-            memory_per_decision=jnp.asarray(plain["memory_per_decision"], dtype=float),
+            memory_per_decision=jnp.asarray(plain["memory_per_decision"]),
             terminated=bool(plain["terminated"]),  # npz returns a scalar as a 0-d array; the annotation is bool
             time_per_episode=float(plain["time_per_episode"]),
             peak_rss_per_process=int(plain["peak_rss_per_process"]),

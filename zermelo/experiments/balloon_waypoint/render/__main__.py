@@ -16,10 +16,9 @@ from zermelo.experiments.balloon_waypoint.metrics.data import (
     settings,  # noqa: E402
 )
 from zermelo.experiments.balloon_waypoint.render.film import film, schedule  # noqa: E402
-from zermelo.experiments.balloon_waypoint.render.globe import Camera, Scene  # noqa: E402
-from zermelo.experiments.balloon_waypoint.render.panels import RASTER_NAMES, compare, contact, detail, globe  # noqa: E402
-from zermelo.experiments.balloon_waypoint.render.replay import read, runs  # noqa: E402
-from zermelo.experiments.balloon_waypoint.render.style import Style, dark  # noqa: E402
+from zermelo.experiments.balloon_waypoint.render.panels import RASTER_NAMES, compare, contact, detail  # noqa: E402
+from zermelo.experiments.balloon_waypoint.render.replay import cells, read  # noqa: E402
+from zermelo.experiments.balloon_waypoint.render.style import Style  # noqa: E402
 from zermelo.experiments.balloon_waypoint.render.submit import send  # noqa: E402
 
 SWEEPS = Path("results") / __package__.split(".")[-2]
@@ -60,21 +59,7 @@ def draw(chosen: Sequence[Path], into: Path, stem: str, given: argparse.Namespac
 
     if given.film:
         written = [into / f"{stem}.mp4"]
-        if alone:  # one episode is filmed on the globe, seen from above the box's centre
-            lat_min, lat_max, lon_min, lon_max = replays[0].box
-            scene = Scene.sown(Camera(int(round(style.world_height * style.dpi)), (lon_min + lon_max) / 2, (lat_min + lat_max) / 2))
-            shaded = dark(style)
-            figure.set_facecolor(shaded.paper)
-            film(
-                figure,
-                lambda fig, move: globe(fig, replays[0], move, shaded, scene),
-                schedule(replays, given.stride),
-                written[0],
-                shaded,
-                fps=given.fps,
-            )
-        else:
-            film(figure, sheet, schedule(replays, given.stride), written[0], style, fps=given.fps)
+        film(figure, sheet, schedule(replays, given.stride), written[0], style, fps=given.fps)
     else:
         last = max(replay.n_moves for replay in replays)
         moves = np.asarray(sorted(int(move) for move in given.moves.split(","))) if given.moves else np.asarray([last])
@@ -96,7 +81,7 @@ def draw(chosen: Sequence[Path], into: Path, stem: str, given: argparse.Namespac
 def main() -> None:
     """Everything the arguments name, drawn here or as an array on the scheduler"""
     parse = argparse.ArgumentParser(prog="render", description="Draw recorded episodes of a balloon.")
-    parse.add_argument("target", type=Path, help="a sweep name, a launch directory, or one run directory")
+    parse.add_argument("target", type=Path, help="a sweep name, a launch directory, or one cell directory")
     parse.add_argument("--arm", help="lay the seeds of this arm side by side, or of every arm with `all`")
     parse.add_argument("--seed", type=int, help="lay the arms at this seed side by side, 0 by default; with --arm, one episode")
     parse.add_argument("--background", default="truth", choices=RASTER_NAMES, help="what a world panel is shaded by")
@@ -110,7 +95,7 @@ def main() -> None:
 
     path = given.target if given.target.exists() else SWEEPS / given.target
     if not path.exists():
-        raise SystemExit(f"no run, launch or sweep at {given.target}")
+        raise SystemExit(f"no cell, launch or sweep at {given.target}")
     style = dataclasses.replace(Style(), dpi=Style().resolutions[given.dpi])
 
     if (path / "record.npz").exists():  # a directory named outright is drawn on its own, whatever else was asked for
@@ -118,7 +103,7 @@ def main() -> None:
     else:
         launch, wanted = latest_launch(path), []
         for arm, seed in lanes(launch, given.arm, given.seed):
-            chosen = runs(launch, seed=None if seed is None else str(seed), arm=arm)
+            chosen = cells(launch, seed=None if seed is None else str(seed), arm=arm)
             asked = " ".join(part for part in (f"--arm {arm}" if arm else "", f"--seed {seed}" if seed is not None else "") if part)
             if len(chosen) == 1:  # an axis with one value on it is one episode, not a comparison of one
                 wanted.append((chosen, chosen[0] / "render", given.background, asked))

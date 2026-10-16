@@ -1,15 +1,8 @@
-"""What a balloon is scored on: standing in the fastest wind the candidates offer at that hour
+"""What a balloon is scored on: predicting where a chosen reading of the wind is largest
 
-W(position, altitude, hours_elapsed) = (u, v)     the wind, m/s
-candidates                  the states the balloon is scored on, a latitude-longitude box at every altitude
-target                      the scalar read off W at a state; speed = ||W||
-at every time_step, from the state arrived in:
-    truth_t[c]            = target at candidate c, at this hours_elapsed `t`         (n_candidates,)
-    best_possible_speed_t = max over c of truth_t[c]
-    speed_t               = ||W(state)|| on a candidate, 0 otherwise
-    reward_t              = speed
-    regret_t              = best_possible_speed - speed                           derived
-claim_t                       (u, v) predicted at every candidate, as means then log-variances
+W(lat, lon, p) = (u, v)     the wind (m/s), u eastward and v northward
+g(W; lat, lon)              the scalar g reads off W at one cell
+claim                       g predicted at every candidate cell, as a mean and a log-variance
 """
 
 import dataclasses
@@ -27,49 +20,46 @@ from zermelo.problems.balloon.grid import SphereGrid
 
 
 class Target(ABC):
-    """The scalar of W an episode is scored on"""
+    """The scalar g an episode is scored on predicting"""
 
     @abstractmethod
     def __call__(self, field: WindField, candidates: dict[str, Any]) -> Float[Array, " n_candidates"]:
-        """The scalar at every candidate state"""
+        """g at every candidate state"""
 
 
 @dataclass(frozen=True)
 class PointSpeed(Target):
-    """speed = ||W(state)||"""
+    """g(W; lat, lon, p) = ||W(lat, lon, p)||"""
 
     def __call__(self, field: WindField, candidates: dict[str, Any]) -> Float[Array, " n_candidates"]:
-        """Speed at each candidate"""
+        """Wind speed at each candidate's own altitude and cell"""
         return jnp.linalg.norm(field(candidates), axis=-1)
 
 
 @dataclass(frozen=True)
 class ColumnPeakSpeed(Target):
-    """max over altitudes of ||W|| above the candidate's grid point, one value shared down a column"""
+    """g(W; lat, lon, p) = max over p' of ||W(lat, lon, p')||, one value shared down a column"""
 
     n_alt: int
     """How many altitudes the column spans"""
 
     def __call__(self, field: WindField, candidates: dict[str, Any]) -> Float[Array, " n_candidates"]:
         """The fastest wind anywhere in each candidate's column"""
-        above = {name: part for name, part in candidates.items() if name != "altitude"}  # position, and the hour
+        cells = candidates["position"]  # (n_candidates, 2)
         per_altitude = jnp.stack(
-            [
-                jnp.linalg.norm(field(above | {"altitude": jnp.full_like(candidates["altitude"], level)}), axis=-1)
-                for level in range(self.n_alt)
-            ]
+            [jnp.linalg.norm(field({"position": cells, "altitude": jnp.full(cells.shape[0], p)}), axis=-1) for p in range(self.n_alt)]
         )  # (alt, n_candidates)
         return jnp.max(per_altitude, axis=0)
 
 
 @dataclass(frozen=True)
 class StormSearch(Objective[dict[str, Float[Array, "..."]]]):
-    """Reward is the speed of the wind the balloon stands in, counted on a candidate, with the best on offer and the claim recorded beside it"""
+    """Reward is the increment in the largest g the balloon has flown through, with the claim recorded beside it"""
 
     target: Target
 
     candidates: Subset[dict[str, Any]]
-    """The states scored, over the state domain a belief is maintained on"""
+    """The states (u, v) is predicted at, over the state domain a belief is maintained on"""
 
     candidate_states: dict[str, Any] = dataclasses.field(init=False, repr=False)
     """The live candidates, gathered once"""
@@ -88,36 +78,48 @@ class StormSearch(Objective[dict[str, Float[Array, "..."]]]):
         """A claim is a function: the mean of (u, v) at any candidate, then their log-variances"""
         return FunctionDomain(self.candidates, BoxDomain((4,)))
 
-    def observe(self, state: dict[str, Any]) -> dict[str, Float[Array, "..."]]:
-        """truth, best_possible_speed and speed at `state`, at the hour it carries"""
-        truth = self.target(state["field"], self.candidate_states | {"hours_elapsed": state["hours_elapsed"]})  # (n_candidates,)
-        on_candidate = self.candidates.live[self.candidates.index_of({part: state[part] for part in self.candidate_states})]
-        speed = jnp.where(on_candidate, jnp.linalg.norm(state["field"](state)), 0.0)
-        return {"truth": truth, "best_possible_speed": jnp.max(truth), "speed": speed}
+    def truth(self, state: dict[str, Any]) -> Float[Array, " n_candidates"]:
+        """g at every candidate, at the hour the state carries"""
+        return self.target(state["field"], self.candidate_states | {"hours": state["hours"]})
+
+    def wind_speed_at(self, state: dict[str, Any]) -> Float[Array, ""]:
+        """||W|| where the balloon stands"""
+        return jnp.linalg.norm(state["field"](state))
 
     def reset(self, state: dict[str, Any]) -> dict[str, Float[Array, "..."]]:
-        """The objective's memory before any time_step, nothing claimed yet"""
-        observed = self.observe(state)
-        return observed | {"claim": jnp.zeros((observed["truth"].shape[0], 4))}  # (n_candidates, 4)
+        """The objective's memory at step zero"""
+        truth = self.truth(state)  # (n_candidates,)
+        return {
+            "incumbent": self.wind_speed_at(state),
+            "oracle": jnp.max(truth),
+            "truth": truth,
+            "claim": jnp.zeros((truth.shape[0], 4)),  # (n_candidates, 4): the mean of (u, v), then their log-variances
+        }
 
     def score(
         self, objective_state: dict[str, Float[Array, "..."]], state: dict[str, Any], decision: Decision, next_state: dict[str, Any]
     ) -> tuple[dict[str, Float[Array, "..."]], Float[Array, ""]]:
-        """The speed at the state arrived in, and the claim as it stood"""
-        observed = self.observe(next_state)
-        return observed | {"claim": decision.claim(self.candidate_states)}, observed["speed"]
+        """What arriving improved on the largest wind flown through, and the claim as it stood"""
+        magnitude, incumbent = self.wind_speed_at(next_state), objective_state["incumbent"]
+        carried = objective_state | {
+            "incumbent": jnp.maximum(incumbent, magnitude),
+            "claim": decision.claim(self.candidate_states),  # (n_candidates, 4)
+        }
+        return carried, jnp.maximum(magnitude - incumbent, 0.0)
 
 
-def candidate_box(grid: SphereGrid, lat_min: float, lat_max: float, lon_min: float, lon_max: float) -> Bool[Array, " pos"]:
-    """The grid points with lat_min <= lat <= lat_max and lon_min <= lon <= lon_max, a box that does not cross the 180 degree meridian"""
-    if lat_min > lat_max or lon_min > lon_max:
-        raise ValueError(
-            f"a box runs from its smaller bound to its larger, and this one is lat {lat_min}..{lat_max}, lon {lon_min}..{lon_max}"
-        )
-    at = grid.elements()  # (pos, 2)
-    return (at[:, 0] >= lat_min) & (at[:, 0] <= lat_max) & (at[:, 1] >= lon_min) & (at[:, 1] <= lon_max)
+def balloon_interior(grid: SphereGrid, margin_lat: int, margin_lon: int) -> Bool[Array, " pos"]:
+    """The grid without the band `margin_lat` rows and `margin_lon` columns deep on every side"""
+    cells = grid.cell_of(grid.elements())  # (pos, 2)
+    return (
+        (cells[:, 0] >= margin_lat)
+        & (cells[:, 0] < grid.n_lat - margin_lat)
+        & (cells[:, 1] >= margin_lon)
+        & (cells[:, 1] < grid.n_lon - margin_lon)
+    )
 
 
-def balloon_candidates(states: ProductDomain, grid: SphereGrid, box: Bool[Array, " pos"]) -> Subset[dict[str, Any]]:
-    """`states` above the grid points `box` marks, at every altitude"""
-    return states.narrow(box[grid.flat_index(states.elements()["position"])])
+def balloon_candidates(states: ProductDomain, grid: SphereGrid, margin_lat: int, margin_lon: int) -> Subset[dict[str, Any]]:
+    """`states` over the grid's interior, at every altitude"""
+    interior = balloon_interior(grid, margin_lat, margin_lon)  # (pos,)
+    return states.narrow(interior[grid.flat_index(states.elements()["position"])])

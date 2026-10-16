@@ -2,16 +2,16 @@ import dataclasses
 
 from zermelo.experiments.balloon_waypoint.registry import (
     ARRIVAL_RADIUS_KM,
-    ATLANTIC_2017SEP,
     CLAIM_EVERY_STEPS,
     HORIZON_LENGTH,
+    IRMA_JOSE,
     N_CANDIDATES,
     N_SEEDS,
-    OPENING_STEPS,
+    OPENING_LEGS,
     PLANNING_BUDGET,
     RECORDED,
     RESOURCES,
-    error_belief,
+    matched_belief,
 )
 from zermelo.experiments.balloon_waypoint.schema import MethodConfig
 from zermelo.experiments.balloon_waypoint.setup import (
@@ -25,7 +25,7 @@ from zermelo.experiments.balloon_waypoint.setup import (
     value_iteration,
 )
 
-BELIEF = error_belief()
+BELIEF = matched_belief()
 """The same model on every arm, matched to the truth"""
 
 
@@ -35,7 +35,7 @@ def _method(
     """This sweep's held values"""
     return MethodConfig(
         utility=utility,
-        planner=value_iteration(replan_every=PLANNING_BUDGET, radius=ARRIVAL_RADIUS_KM, target_chunk=None, cost_weight=cost_weight),
+        planner=value_iteration(max_steps=PLANNING_BUDGET, radius=ARRIVAL_RADIUS_KM, target_chunk=None, cost_weight=cost_weight),
         improvement=improvement,
         n_fields=n_fields,
         n_walks=n_walks,
@@ -43,13 +43,13 @@ def _method(
         step_rate=step_rate,
         steps_from="predicted",
         n_candidates=N_CANDIDATES,
-        opening_steps=OPENING_STEPS,
+        opening_legs=OPENING_LEGS,
     )
 
 
 sweep(
     "acquisitions_real",
-    problem=ATLANTIC_2017SEP,
+    problem=IRMA_JOSE,
     horizon=HORIZON_LENGTH,
     claim_every=CLAIM_EVERY_STEPS,
     recorded=RECORDED,

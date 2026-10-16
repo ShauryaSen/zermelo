@@ -6,25 +6,14 @@ from typing import Any
 
 import jax.numpy as jnp
 import numpy as np
-from jaxtyping import Array, Bool, Float, PRNGKeyArray
+from jaxtyping import Array, Float, PRNGKeyArray
 
-from zermelo.interface import (
-    BoxDomain,
-    DiscreteDomain,
-    Domain,
-    Enumerable,
-    FunctionDomain,
-    Prior,
-    ProductDomain,
-    ProductPrior,
-    Uniform,
-    World,
-)
-from zermelo.problems.balloon.field import ForecastPrior, TimeVaryingWind, WindError
-from zermelo.problems.balloon.grid import SphereGrid
-from zermelo.problems.balloon.objective import StormSearch, Target, balloon_candidates
-from zermelo.problems.balloon.readout import PointWind
-from zermelo.problems.balloon.transition import Advection, Ascent, BalloonTransition, Clock
+from zermelo.interface import BoxDomain, Domain, Enumerable, FunctionDomain, Prior, ProductDomain, ProductPrior, Transition, Uniform, World
+from zermelo.problems.balloon.field import ForecastPrior, WindError
+from zermelo.problems.balloon.grid import SphereGrid, Steps
+from zermelo.problems.balloon.objective import StormSearch, Target, balloon_candidates, balloon_interior
+from zermelo.problems.balloon.readout import BalloonReadout
+from zermelo.problems.balloon.transition import Advection, Ascent, BalloonTransition, Clock, SmoothBalloonTransition
 
 
 class Highest(Prior[Any]):
@@ -34,7 +23,7 @@ class Highest(Prior[Any]):
         """The element at `size() - 1`"""
         if not isinstance(domain, Enumerable):
             raise TypeError(f"a {type(domain).__name__} has no largest element, so none can be drawn from it")
-        return domain.from_index(jnp.asarray(domain.size() - 1, jnp.int32))
+        return domain.from_index(jnp.asarray(domain.size() - 1))
 
 
 class Zero(Prior[Float[Array, ""]]):
@@ -46,52 +35,41 @@ class Zero(Prior[Float[Array, ""]]):
 
 
 @dataclass(frozen=True)
-class WindData:
-    """The wind data: W the truth and F the forecast
+class WindRecord:
+    """W and F as (t, alt, pos, uv)
 
-    hour                    hours since the data's own start, one per frame
-    last_hour_in_dataset    the hour of the last frame
+    W   True wind
+    F   Forecast (issued at t=0, valid at t)
     """
 
-    wind: Float[Array, "frames alt pos uv"]
-    forecast: Float[Array, "frames alt pos uv"]
-    hour: Float[Array, " frames"]
+    wind: Float[Array, "t alt pos uv"]
+    forecast: Float[Array, "t alt pos uv"]
+    hours: Float[Array, " t"]
     altitude_km: Float[Array, " alt"]
     grid: SphereGrid
 
     @property
     def n_alt(self) -> int:
-        """How many altitudes the data holds"""
+        """How many altitudes the record holds"""
         return self.wind.shape[1]
 
-    def frames_from(
-        self, start_hour: float, episode_hours: float, time_varying: bool
-    ) -> tuple[Float[Array, "frames alt pos uv"], Float[Array, "frames alt pos uv"], Float[Array, " frames"]]:
-        """(W, F, frame_hours_elapsed) over the frames an episode starting at `start_hour` reads:
+    def at(self, frame: int) -> Float[Array, "alt pos uv"]:
+        """W[frame,..,.]"""
+        return self.wind[frame]
 
-            time_varying    every frame with start_hour <= hour <= start_hour + episode_hours
-            otherwise       the one frame at start_hour
+    def forecast_at(self, frame: int) -> Float[Array, "alt pos uv"]:
+        """F[frame,..,.]"""
+        return self.forecast[frame]
 
-        frame_hours_elapsed = hour - start_hour.
-        """
-        last_hour_in_dataset = float(self.hour[-1])
-        if not bool(jnp.any(self.hour == start_hour)):
-            raise ValueError(
-                f"the data holds no frame at hour {start_hour}; it runs from hour {float(self.hour[0])} to {last_hour_in_dataset}"
-            )
-        end_hour = start_hour + episode_hours if time_varying else start_hour
-        if end_hour > last_hour_in_dataset:
-            raise ValueError(
-                f"an episode from hour {start_hour} runs to hour {end_hour}, and last_hour_in_dataset is {last_hour_in_dataset}"
-            )
-        frames = jnp.flatnonzero((self.hour >= start_hour) & (self.hour <= end_hour))
-        return self.wind[frames], self.forecast[frames], self.hour[frames] - start_hour
+    def window(self, frames: slice) -> tuple[tuple[Float[Array, "t alt pos uv"], Float[Array, "t alt pos uv"]], Float[Array, " t"]]:
+        """(W, F) over `frames`, and the hours they stand for rebased so the episode starts at zero"""
+        return (self.wind[frames], self.forecast[frames]), self.hours[frames] - self.hours[frames][0]
 
 
-def load_wind(path: Path, grid_stride: int, hour_stride: int) -> WindData:
-    """The wind data stored at `path`, keeping every `grid_stride`-th row and column and every `hour_stride`-th frame"""
+def load_wind(path: Path) -> WindRecord:
+    """The wind record stored at `path`, laid out for the grid it sits on"""
     raw = np.load(path)
-    lat, lon = raw["latitude"][::grid_stride], raw["longitude"][::grid_stride]
+    lat, lon = raw["latitude"], raw["longitude"]
     grid = SphereGrid(
         n_lat=len(lat),
         n_lon=len(lon),
@@ -100,46 +78,54 @@ def load_wind(path: Path, grid_stride: int, hour_stride: int) -> WindData:
         lat_step=float(lat[1] - lat[0]),
         lon_step=float(lon[1] - lon[0]),
     )
-
-    def laid_out(u: str, v: str) -> Float[Array, "frames alt pos uv"]:
-        """One wind as (frames, alt, pos, uv), strided as it is read, the whole data being larger than this process may hold"""
-        kept = np.stack([raw[name][::hour_stride, :, ::grid_stride, ::grid_stride] for name in (u, v)], axis=-1)
-        return jnp.asarray(kept.reshape(kept.shape[0], kept.shape[1], grid.size(), 2))
-
-    return WindData(
-        laid_out("u", "v"),
-        laid_out("forecast_u", "forecast_v"),
-        jnp.asarray(raw["hours"][::hour_stride]),
-        jnp.asarray(raw["altitude_km"]),
-        grid,
-    )
+    shape = (raw["u"].shape[0], raw["u"].shape[1], grid.size(), 2)  # (t, alt, pos, uv)
+    wind = np.stack([raw["u"], raw["v"]], axis=-1).reshape(shape)
+    forecast = np.stack([raw["forecast_u"], raw["forecast_v"]], axis=-1).reshape(shape)
+    return WindRecord(jnp.asarray(wind), jnp.asarray(forecast), jnp.asarray(raw["hours"]), jnp.asarray(raw["altitude_km"]), grid)
 
 
-def balloon_transition(wind_data: WindData, states: ProductDomain, step_hours: float) -> BalloonTransition:
-    """One time_step of the balloon over `states`: the wind carries it, the action moves it an altitude, and the clock advances"""
-    return BalloonTransition(Advection(wind_data.grid, step_hours), Ascent(wind_data.n_alt), Clock(step_hours), states)
+def balloon_transition(recording: WindRecord, states: ProductDomain, step_hours: float) -> BalloonTransition:
+    """One step of the balloon over `states`: the wind carries it, the action moves it an altitude, and the clock updates"""
+    return BalloonTransition(Advection(recording.grid, step_hours), Ascent(recording.n_alt), Clock(step_hours), states)
+
+
+def smooth_transition(recording: WindRecord, states: ProductDomain, step_hours: float, climb_cap_km: float) -> SmoothBalloonTransition:
+    """One step of a balloon with real coordinates, over the levels `states` holds"""
+    altitudes = states.parts["altitude"]
+    if not isinstance(altitudes, Steps):
+        raise TypeError(f"a smooth balloon climbs between the record's levels, and the altitude part is a {type(altitudes).__name__}")
+    return SmoothBalloonTransition(recording.grid, altitudes, step_hours, climb_cap_km)
 
 
 def balloon_world(
-    grid: SphereGrid,
+    recording: WindRecord,
     states: ProductDomain,
-    forecast: Float[Array, "frames alt pos uv"],
-    frame_hours_elapsed: Float[Array, " frames"],
+    forecast: Float[Array, "alt pos uv"] | Float[Array, "t alt pos uv"],
     error: WindError,
-    transition: BalloonTransition,
+    transition: Transition[Any],
+    readout: type[BalloonReadout],
     resource_units: int,
-    start_box: Bool[Array, " pos"],
+    margin_lat: int,
+    margin_lon: int,
+    hours: Float[Array, " t"] | None,
+    continuous: bool = False,
 ) -> World:
-    """The problem a forecast poses: the balloon starts over a grid point `start_box` marks, and the wind is that forecast plus an error"""
-    wind_domain = FunctionDomain(ProductDomain({**states.parts, "hours_elapsed": BoxDomain(())}), BoxDomain((2,)))
+    """The problem a forecast poses: the balloon starts over the grid's interior, and the wind is that forecast plus an error.
+
+    Continuous, the altitude is any real level between the record's first and last, and the wind is read between records.
+    """
+    grid = recording.grid
+    initial_forecast = forecast if hours is None else forecast[0]  # what the agent is told at the hour it starts
+    altitude = BoxDomain((), 0.0, float(recording.n_alt - 1)) if continuous else states.parts["altitude"]
     return World(
         state_domain=ProductDomain(
             {
                 **states.parts,
-                "position": grid.narrow(start_box),
-                "balloon_resource": DiscreteDomain(resource_units + 1),
-                "hours_elapsed": BoxDomain(()),
-                "field": wind_domain,
+                "position": grid.narrow(balloon_interior(grid, margin_lat, margin_lon)),
+                "altitude": altitude,
+                "balloon_resource": Steps((0.0,) * (resource_units + 1)),
+                "hours": BoxDomain(()),
+                "field": FunctionDomain(grid, BoxDomain((2,))),
             }
         ),
         prior=ProductPrior(
@@ -147,15 +133,15 @@ def balloon_world(
                 "position": Uniform(),
                 "altitude": Uniform(),
                 "balloon_resource": Highest(),
-                "hours_elapsed": Zero(),
-                "field": ForecastPrior(forecast, error, grid, frame_hours_elapsed),
+                "hours": Zero(),
+                "field": ForecastPrior(forecast, error, grid, hours, smooth=continuous),
             }
         ),
         transition=transition,
-        readout=PointWind(TimeVaryingWind(forecast, frame_hours_elapsed, grid), states),
+        readout=readout(grid, recording.n_alt, initial_forecast, states),
     )
 
 
-def balloon_objective(states: ProductDomain, grid: SphereGrid, target: Target, box: Bool[Array, " pos"]) -> StormSearch:
-    """What the episode is scored on: `target` over the states above the grid points `box` marks"""
-    return StormSearch(target, balloon_candidates(states, grid, box))
+def balloon_objective(recording: WindRecord, states: ProductDomain, target: Target, margin_lat: int, margin_lon: int) -> StormSearch:
+    """What the episode is scored on: `target` predicted over the states above the grid's interior"""
+    return StormSearch(target, balloon_candidates(states, recording.grid, margin_lat, margin_lon))

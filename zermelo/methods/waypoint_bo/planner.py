@@ -14,29 +14,23 @@ from zermelo.interface import Domain, TransitionKernel
 from zermelo.methods.waypoint_bo.belief import coordinates
 
 
-def position_of(actions: Int[Array, " n_actions"], act: Int[Array, "*batch"]) -> Int[Array, "*batch"]:
-    """Where each act's value sits in `actions`, the axis a table stacked over `actions` is indexed by"""
-    return jnp.argmax(actions == act[..., None], axis=-1)
-
-
 @register_dataclass
 @dataclass(frozen=True)
 class Policy:
-    """`pi_n`: the act to take at every state to reach each target, and what that costs"""
+    """`pi_n`: the act to take at every cell to reach each target, and what that costs"""
 
     act: Int[Array, "n_states n_targets"]
-    """The action's value, as the transition takes it"""
 
     hitting_cost: Float[Array, "n_states n_targets"]
-    """`H^pi(s, x) = c(s, pi(s)) + sum over s' of P(s' | s, pi(s)) H^pi(s', x)`, zero on arrival and truncated at `replan_every` time_steps"""
+    """`H^pi(s, x) = c(s, pi(s)) + sum over s' of P(s' | s, pi(s)) H^pi(s', x)`, zero on arrival and truncated at `max_steps`"""
 
 
 @dataclass(frozen=True)
 class Planner(ABC):
     """Turns a kernel and a set of targets into an act table, and evaluates what following it costs"""
 
-    replan_every: int
-    """`L`: a waypoint is chosen anew after this many time_steps, and a route is planned, costed and rolled over at most as many"""
+    max_steps: int
+    """`L`: backups taken, so a route is planned and costed over at most `L` steps"""
 
     radius: float
     """`rho`: how close to a target counts as arrived, on embedded coordinates"""
@@ -54,8 +48,8 @@ class Planner(ABC):
 
     @property
     def cost_budget(self) -> float:
-        """`B = L * (1 + w)`: the most a route of `L` time_steps costs"""
-        return self.replan_every * (1.0 + self.cost_weight)
+        """`B = L * (1 + w)`: the most a route of `max_steps` steps costs"""
+        return self.max_steps * (1.0 + self.cost_weight)
 
     @abstractmethod
     def act_table(
@@ -65,14 +59,14 @@ class Planner(ABC):
         targets: Int[Array, " n_targets"],
         actions: Int[Array, " n_actions"],
     ) -> Int[Array, "n_states n_targets"]:
-        """The value of the act to take at each state when steering to each target"""
+        """The act to take at each cell when steering to each target"""
 
     def arrived(self, domain: Domain, targets: Int[Array, " n_targets"]) -> Bool[Array, "n_states n_targets"]:
-        """Whether each state of `domain` is within `radius` of each target"""
+        """Whether each cell of `domain` is within `radius` of each target"""
         return self._squared_distance(domain, targets) <= self.radius**2
 
     def _squared_distance(self, domain: Domain, targets: Int[Array, " n_targets"]) -> Float[Array, "n_states n_targets"]:
-        """Squared embedded distance from every state to every target"""
+        """Squared embedded distance from every cell to every target"""
         coords = coordinates(domain)  # (n_states, k)
         square = jnp.sum(coords**2, axis=-1)
         return jnp.maximum(square[:, None] + square[targets][None, :] - 2 * coords @ coords[targets].T, 0.0)
@@ -114,7 +108,7 @@ class Planner(ABC):
         targets: Int[Array, " n_targets"],
         actions: Int[Array, " n_actions"],
     ) -> Policy:
-        """An act table for every target, and `L` rounds of
+        """An act table for every target, and `max_steps` rounds of
 
         h_0(s)     = 0
         h_{k+1}(s) = 0                                                     on arrival
@@ -125,40 +119,40 @@ class Planner(ABC):
         rows, columns = jnp.arange(stop.shape[0])[:, None], jnp.arange(stop.shape[1])[None, :]
         hitting = lax.fori_loop(
             0,
-            self.replan_every,
-            lambda _, h: jnp.where(stop, 0.0, self._backup(kernel, h, actions)[position_of(actions, act), rows, columns]),
+            self.max_steps,
+            lambda _, h: jnp.where(stop, 0.0, self._backup(kernel, h, actions)[act, rows, columns]),
             jnp.zeros(stop.shape),
         )
-        return Policy(act.astype(jnp.int8), hitting)  # an act value fits a byte
+        return Policy(act, hitting)
 
     @partial(jax.jit, static_argnums=0)
     def roll(
         self, walk_keys: PRNGKeyArray, kernel: TransitionKernel[Int[Array, ""]], policy: Policy, start: Int[Array, ""]
-    ) -> tuple[Int[Array, "n_walks n_targets replan_every"], Bool[Array, "n_walks n_targets replan_every"]]:
-        """One sampled walk per key per target from `start`: the states stepped onto, and which of those steps moved"""
-        arrived = policy.hitting_cost == 0.0  # (n_states, n_targets): H = 0 marks the states that count as the target
+    ) -> tuple[Int[Array, "n_walks n_targets max_steps"], Bool[Array, "n_walks n_targets max_steps"]]:
+        """One sampled walk per key per target from `start`: the cells stepped onto, and which of those steps moved"""
+        arrived = policy.hitting_cost == 0.0  # (n_states, n_targets): H = 0 marks the cells that count as the target
         target_column = jnp.arange(policy.act.shape[1])  # (n_targets,): which column of the tables each walk reads
-        step_to = jax.vmap(kernel.sample, in_axes=(None, 0, 0))  # (key, state per target, act per target) -> next state per target
+        step_to = jax.vmap(kernel.sample, in_axes=(None, 0, 0))  # (key, cell per target, act per target) -> next cell per target
 
-        def one_walk(key: PRNGKeyArray) -> tuple[Int[Array, "n_targets replan_every"], Bool[Array, "n_targets replan_every"]]:
+        def one_walk(key: PRNGKeyArray) -> tuple[Int[Array, "n_targets max_steps"], Bool[Array, "n_targets max_steps"]]:
             """One walk to every target: z_0 = start, z_{t+1} ~ P(. | z_t, act(z_t)) until arrived(z_t)"""
-            state = jnp.full(target_column.shape, start)  # (n_targets,): z_0 = start
+            cell = jnp.full(target_column.shape, start)  # (n_targets,): z_0 = start
             travelling = jnp.ones(target_column.shape, bool)  # (n_targets,): not arrived(z_t)
             path, moved = [], []
-            for step_key in jax.random.split(key, self.replan_every):
+            for step_key in jax.random.split(key, self.max_steps):
                 # z_{t+1} = P-draw where travelling, else z_t
-                state = jnp.where(travelling, step_to(step_key, state, policy.act[state, target_column]), state)
-                path.append(state)
+                cell = jnp.where(travelling, step_to(step_key, cell, policy.act[cell, target_column]), cell)
+                path.append(cell)
                 moved.append(travelling)
-                travelling = travelling & ~arrived[state, target_column]  # travelling and not arrived(z_{t+1})
-            return jnp.stack(path, axis=-1), jnp.stack(moved, axis=-1)  # both (n_targets, replan_every)
+                travelling = travelling & ~arrived[cell, target_column]  # travelling and not arrived(z_{t+1})
+            return jnp.stack(path, axis=-1), jnp.stack(moved, axis=-1)  # both (n_targets, max_steps)
 
-        return jax.vmap(one_walk)(walk_keys)  # both (n_walks, n_targets, replan_every)
+        return jax.vmap(one_walk)(walk_keys)  # both (n_walks, n_targets, max_steps)
 
 
 @dataclass(frozen=True)
 class ValueIteration(Planner):
-    """`L` rounds of
+    """`max_steps` rounds of
 
         v_0(s)     = 0
         v_{k+1}(s) = 0                                                          on arrival
@@ -176,10 +170,7 @@ class ValueIteration(Planner):
     ) -> Int[Array, "n_states n_targets"]:
         stop = self.arrived(kernel.domain, targets)
         values = lax.fori_loop(
-            0,
-            self.replan_every,
-            lambda _, v: jnp.where(stop, 0.0, jnp.min(self._backup(kernel, v, actions), axis=0)),
-            jnp.zeros(stop.shape),
+            0, self.max_steps, lambda _, v: jnp.where(stop, 0.0, jnp.min(self._backup(kernel, v, actions), axis=0)), jnp.zeros(stop.shape)
         )
         return actions[jnp.argmin(self._backup(kernel, values, actions), axis=0)]
 
@@ -205,7 +196,7 @@ class Greedy(Planner):
 
 @dataclass(frozen=True)
 class RandomWalk(Planner):
-    """One uniform act per state, drawn when the plan is made and the same for every target"""
+    """One uniform act per cell, drawn when the plan is made and the same for every target"""
 
     def act_table(
         self,

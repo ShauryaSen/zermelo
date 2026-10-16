@@ -122,9 +122,9 @@ class DiscreteDomain(Domain[Int[Array, ""]], Enumerable[Int[Array, ""]]):
     def project(self, x: Int[Array, ""]) -> Int[Array, ""]:
         return jnp.clip(x, 0, self.n - 1)
 
-    def narrow(self, mask: Bool[Array, " n"]) -> Subset[Int[Array, ""]]:
-        """`mask` marks which of the `n` options are live now"""
-        return Subset(self, mask)
+    def narrow(self, witness: Bool[Array, " n"]) -> Subset[Int[Array, ""]]:
+        """`witness` marks which of the `n` options are live now"""
+        return Subset(self, witness)
 
     def size(self) -> int:
         return self.n
@@ -189,9 +189,9 @@ class ProductDomain(Domain[dict[str, Any]]):
     def project(self, x: dict[str, Any]) -> dict[str, Any]:
         return {name: part.project(x[name]) for name, part in self.parts.items()}
 
-    def narrow(self, mask: Bool[Array, " n"]) -> Subset[dict[str, Any]]:
-        """`mask` marks which of the enumerated elements are live now, in this domain's index order"""
-        return Subset(self, mask)
+    def narrow(self, witness: Bool[Array, " n"]) -> Subset[dict[str, Any]]:
+        """`witness` marks which of the enumerated elements are live now, in this domain's index order"""
+        return Subset(self, witness)
 
     def _indexed(self) -> list[tuple[str, Any]]:
         """The parts in declaration order, each one Enumerable, or a raise naming the part that is not"""

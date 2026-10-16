@@ -1,7 +1,7 @@
 """Every number a drawing is made with"""
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 import cmocean
 import matplotlib as mpl
@@ -240,18 +240,3 @@ class Style:
 
     curve_key_size: float = 13.0
     """Type size of the key under a curve panel"""
-
-
-def dark(style: Style) -> Style:
-    """`style` on the colour of space: light type and rules, a light wash over the margin"""
-    return replace(
-        style,
-        paper="#05070d",
-        ink="#e6edf3",
-        faint="#8a98a8",
-        pad_wash="#e6edf3",
-        trail_halo="#e6edf3",
-        arrow_colour="#e6edf3",
-        frame_colour="#8a98a8",
-        absent="#141a22",
-    )
