@@ -25,8 +25,9 @@ charge of the paper's formulation is priced at zero here (`resource_weight=0`), 
 the plan nothing. The world still caps altitude changes by `resource_units`, so the budget binds even when
 the planner does not price it.
 
-One sweep is registered per noise level, `bounds_noise_s0` through `bounds_noise_s96`, named for sigma in
-tenths of a metre per second.
+One sweep is registered per noise level, `mpc_noise_s0` through `mpc_noise_s96`, named for sigma in tenths
+of a metre per second. The three-arm `bounds_noise_s*` sweeps this file was written for are not registered;
+see `BOUNDS_NEED_A_COMMON_WAYPOINT`.
 """
 
 import dataclasses
