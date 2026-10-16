@@ -431,6 +431,47 @@ implemented in `methods/waypoint_bo/agent.py` and works.
 
 ---
 
+## 9a. What the first ladder actually said
+
+The first two levels came back before the rest, and they changed the priority of everything else, so they
+belong here rather than in a results appendix.
+
+| sigma | gap closed | arrived | legs flown | out of reach | opening gap |
+|---|---|---|---|---|---|
+| 0.0 | +0.055 ± 0.099 | 0.366 ± 0.057 | 3.2 ± 0.2 | 0.168 ± 0.060 | 2214 ± 397 km |
+| 1.2 | +0.145 ± 0.068 | 0.380 ± 0.056 | 2.9 ± 0.2 | 0.174 ± 0.057 | 2391 ± 409 km |
+
+32 seeds each. The self-check does not pass. Sigma zero was supposed to be clearly the best row, since the
+forecast there is exactly the truth, and instead it is nominally the worse of the two. The difference is
+comfortably inside the error bars so we are not claiming a degraded forecast is better, but we cannot claim
+a perfect one is better either, which is what the test required.
+
+We checked that sigma zero really is a perfect forecast rather than a plumbing mistake. `GaussianError`
+builds its draw as `amplitude_ms * cholesky(K) @ white`, so at an amplitude of zero the draw is exactly
+zero, the forecast equals the truth bit for bit, and the belief's prior mean is exactly right everywhere.
+The arm genuinely has a perfect wind model.
+
+So the finding is real and it is larger than the question we set out to ask. **With a perfect forecast the
+controller closes about five percent of the average leg's gap.** Forecast quality cannot be the binding
+constraint on performance, because removing forecast error entirely does not help.
+
+The reason is in the same two rows. A leg can cover roughly 3 700 km at the absolute best, and the average
+waypoint is 2 214 km away, which is about sixty percent of a theoretical maximum that assumes the fastest
+wind in the record blowing in exactly the right direction for sixty consecutive hours. Seventeen percent of
+waypoints are beyond any possible reach at all. The balloon is mostly being asked to do something it cannot
+do, and under those conditions the quality of its map is a second-order concern.
+
+This is the reachability problem of section 10 showing up as a measured result rather than as a worry. It is
+also a caution about small samples: the eight-seed figures that preceded this run gave `gap closed` as
+-0.27, `out of reach` as 0.062 and the opening gap as 1 151 km, and every one of those moved substantially
+at 32 seeds.
+
+`near_noise_s*` in `sweeps/noise_near.py` is the follow-up: the same ladder with `margin_lon` raised from 3
+to 22, confining candidates to about 2 800 km so that every waypoint is reachable. If `gap closed` at sigma
+zero then rises clear of the higher levels, the ladder means something and that is the configuration to run
+it in. If it stays flat, the binding constraint is somewhere else again and no noise result is worth
+reporting until we find it.
+
 ## 10. Things we know are wrong
 
 These are recorded rather than fixed, because they are in code that predates this work and changing someone
