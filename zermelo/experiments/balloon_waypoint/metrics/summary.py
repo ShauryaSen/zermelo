@@ -32,6 +32,8 @@ NOTATION = (
     (r"$H^\pi(z, x)$", r"steps from $z$ to $x$ under $\pi$, as the planner's own table, capped at $L$"),
     (r"$H_j$", r"$H^\pi(z, x^\star_j)$ read when leg $j$ chose its waypoint"),
     (r"$w_t(x)$", r"what $x$ was worth at move $t$, before travel was charged for reaching it"),
+    (r"$\chi(\cdot)$", r"where a state sits in km: the chord on the sphere, then the altitude"),
+    (r"$V$", r"the navigator's own cost, $\sum_t \|\chi(z_t, p_t) - \chi(x^\star_t)\|$, the resource charge at zero"),
     (r"$\Delta_t$", r"seconds inside the method's own call at move $t$"),
     (r"$t_{\mathrm{draw}}$, $t_{\mathrm{last}}$", r"wall clock at the draw of the instance and at the last move"),
     (r"$\mathrm{RSS}_t$", r"resident bytes of the process at move $t$, which several episodes may share"),
@@ -50,6 +52,8 @@ OUTCOME = (
 DIAGNOSTIC = (
     ("legs", "legs", r"J", 0, "none"),
     ("arrival_rate", "arrived", r"\frac{1}{J} \sum_{j \leq J} \mathbf{1}[k_j < L]", 3, "max"),
+    ("summed_distance", "distance summed", r"V = \sum_{t > T_0} \|\chi(z_t, p_t) - \chi(x^\star_t)\|", 0, "min"),
+    ("leg_distance", "distance a leg", r"\frac{1}{J} \sum_{j \leq J} \sum_{t \in j} \|\chi(z_t, p_t) - \chi(x^\star_j)\|", 0, "min"),
     ("walked", "steps walked", r"\frac{1}{J} \sum_{j \leq J} k_j", 1, "none"),
     ("predicted", "steps predicted", r"\frac{1}{J} \sum_{j \leq J} H_j", 1, "none"),
     ("altitude_changes", "altitude changes", r"\sum_{t = 1}^{T} |p_t - p_{t - 1}|", 0, "none"),
@@ -174,8 +178,9 @@ def write(
         legs.groupby(["arm", "seed"]).agg(legs=("walked", "size"), walked=("walked", "mean"), predicted=("predicted", "mean")).reset_index()
     )
     counted["arrival_rate"] = legs.groupby(["arm", "seed"])["arrived"].mean().to_numpy()
+    counted["leg_distance"] = legs.groupby(["arm", "seed"])["distance"].mean().to_numpy()
     diagnostics = (
-        ended[["arm", "seed", "cells_visited", "altitude_changes", "fastest_wind_flown"]]
+        ended[["arm", "seed", "cells_visited", "altitude_changes", "fastest_wind_flown", "summed_distance"]]
         .merge(held, on=["arm", "seed"], how="left")
         .merge(counted, on=["arm", "seed"], how="left")
     )

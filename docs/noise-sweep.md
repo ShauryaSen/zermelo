@@ -159,7 +159,7 @@ changes what the experiment measures and is a live question.
 | `mpc_noise_s{0,12,24,48,72,96}` | `mpc` | the controller across the ladder |
 | `bounds_noise_s{…}` | `hind`, `mpc`, `plan` | the three bounds, when hindsight is wanted |
 
-`SEEDS = range(8)`; resources are 4 cpus, 16 GB, 60 min, partition `dean`. Measured on `dean-cpu-01`, the
+`SEEDS = range(32)`; resources are 4 cpus, 16 GB, 60 min, partition `dean`. Measured on `dean-cpu-01`, the
 eight seeds of `mpc_noise_s24` take **9 m 55 s end to end in one process** — a two-minute JAX compile and
 about 70 s a seed — so as a Slurm array the whole ladder finishes in minutes.
 
@@ -176,6 +176,24 @@ and the number they are read through is
 ```
 (V_mpc − V_plan) / (V_hind − V_plan)
 ```
+
+where
+
+```
+V = sum over t > T0 of || chi(z_t, p_t) − chi(x*_t) ||
+```
+
+is the navigator's own cost — the distance to the standing waypoint summed over every move after the
+opening, with the resource charge at zero — and `chi` places a state in kilometres as the chord on the
+sphere followed by the altitude, exactly as `SphereGrid.embed` and `Steps.embed` do.
+
+**Why `V` and not the arrival rate.** The ratio only means something if `V` is what the three arms minimise.
+Hindsight minimises summed distance; it is under no obligation to arrive more often than the controller, so
+a ratio taken on arrivals can leave `[0, 1]` and stops being a statement about anything. Summed distance is
+also the lower-variance estimator: a continuous per-move quantity against a binary per-leg one.
+
+`summed_distance` and `leg_distance` are computed after the fact from the record — the positions, altitudes
+and standing waypoint it already stores — so no simulation code is involved in producing them.
 
 1 meaning the controller captures everything closed-loop control can buy, 0 meaning it does no better than
 committing to a plan and flying it blind.
@@ -200,3 +218,25 @@ pixi run submit balloon_waypoint mpc_noise_s24     # the same cells as a Slurm a
 # `draw` takes the launch DIRECTORY, not the sweep name; a launch is stamped with its start time
 pixi run draw balloon_waypoint results/balloon_waypoint/mpc_noise_s24/2026-10-15_23-33-04
 ```
+
+## 10. What one level looks like
+
+`mpc_noise_s24`, 8 seeds, measured 2026-10-15 before the seed count was raised:
+
+| | | |
+|---|---|---|
+| legs finished | 4 ± 1 | 20 opening moves, then 60 at up to 20 a leg |
+| arrived | 0.477 ± 0.337 | **mid-range: the ladder is not saturated at this rung** |
+| steps walked | 12.6 ± 5.0 | against 10.0 predicted by the planner's table |
+| altitude changes | 36 | **of a budget of 40 — see below** |
+| reachable | 1.000 | every candidate within the planner's truncation |
+| worth nothing | 0.000 | the waypoint chooser is never constrained |
+| seconds a move | 0.78 | 67 s an episode |
+
+**Arrival sits mid-range**, which is where a noise sweep wants its middle rung: there is room to climb at
+σ = 0 and to fall at σ = 9.6.
+
+**The altitude budget is nearly spent.** 36 of 40, the expected consequence of `resource_weight = 0` (§5). A
+worse forecast means more corrective climbing, so this is the number to watch up the ladder: if it pegs at
+40 the balloon is unsteerable over its last legs and the experiment measures an exhausted budget rather than
+a degraded forecast. That would be a confound, not a result.

@@ -14,6 +14,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from zermelo.problems.balloon.grid import EARTH_RADIUS_KM
+
 LOG_VARIANCE_FLOOR = -12.0
 """Smallest log-variance a claim is read at"""
 
@@ -51,6 +53,8 @@ CURVES = {
 
 DIAGNOSTICS = {
     "arrival_rate": ("share of legs that arrived", "linear"),
+    "summed_distance": ("distance to the waypoint, summed (km)", "linear"),
+    "distance_to_waypoint": ("distance to the waypoint (km)", "linear"),
     "cells_visited": ("distinct cells visited", "linear"),
     "altitude_changes": ("altitude changes made", "linear"),
     "fastest_wind_flown": ("fastest wind flown in (m/s)", "linear"),
@@ -67,6 +71,7 @@ TABLE_CHANNELS = CURVE_CHANNELS + (
     "state/altitude",
     "agent_state/steps_since_waypoint",
     "agent_state/scores.predicted_step_cost",
+    "agent_state/scores.waypoint",
     "agent_state/scores.frac_zero_value_candidates",
     "agent_state/scores.frac_reachable_candidates",
     "reward",
@@ -144,18 +149,58 @@ def episode_legs(held: dict[str, Any], config: dict[str, Any]) -> dict[str, np.n
     """One row per finished waypoint leg: the move it ended at, the steps walked, the steps predicted, and whether it arrived"""
     method = config.get("method")
     if method is None:
-        return {name: np.zeros(0) for name in ("ended", "walked", "predicted", "arrived")}
+        return {name: np.zeros(0) for name in ("ended", "walked", "predicted", "arrived", "distance")}
     budget = int(method["planner"]["max_steps"])
     since = held["agent_state/steps_since_waypoint"]  # (moves + 1,) zero on a replan and up one a move
     ends = np.flatnonzero(np.diff(since) < 0)  # the last snapshot of each waypoint leg, where the sawtooth drops
     ends = ends[ends > opening_moves(config, since.size - 1)]  # the drop closing the opening ends no waypoint leg
     walked = since[ends].astype(float)
+    apart = np.nan_to_num(episode_distance(held, config))  # move t sits at apart[t - 1]
+    inside = np.concatenate([[0.0], np.cumsum(apart)])  # so a leg's own sum is one difference
+    taken = walked.astype(int)
     return {
         "ended": ends.astype(float),
         "walked": walked,
         "predicted": held["agent_state/scores.predicted_step_cost"][ends],
         "arrived": (walked < budget).astype(float),  # a waypoint leg ends on arrival or on the budget: short means arrived
+        "distance": inside[ends] - inside[ends - taken],  # summed distance to the waypoint over the moves of this leg
     }
+
+
+def _geometry(config: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The record's own latitudes, longitudes and altitudes, read from the file the problem names"""
+    with np.load(config["problem"]["wind_path"]) as npz:
+        return np.asarray(npz["lat"]), np.asarray(npz["lon"]), np.asarray(npz["altitude_km"])
+
+
+def _embedded(lat: Any, lon: Any, level: Any, altitude_km: np.ndarray) -> np.ndarray:
+    """Where a state sits, in the kilometres distance between states is measured in: the chord on the sphere,
+    then the altitude. `SphereGrid.embed` and `Steps.embed` in numpy, so a record can be read without jax"""
+    phi, lam = np.radians(lat), np.radians(lon)
+    chord = EARTH_RADIUS_KM * np.stack([np.cos(phi) * np.cos(lam), np.cos(phi) * np.sin(lam), np.sin(phi)], axis=-1)
+    high = np.interp(level, np.arange(altitude_km.size), altitude_km)[..., None]  # a level may sit between steps
+    return np.concatenate([chord, high], axis=-1)
+
+
+def episode_distance(held: dict[str, Any], config: dict[str, Any]) -> np.ndarray:
+    """The distance to the standing waypoint at each move (km), nan where no waypoint had been chosen yet
+
+    This is the quantity the navigator minimises: `J(u) = sum_k || x_k - target ||` with the resource charge at
+    zero. Summing it over the episode is the `V` the three bounds are compared on.
+    """
+    moves = int(held["reward"].shape[0])
+    waypoint = held.get("agent_state/scores.waypoint")  # absent on an arm that runs no rule
+    if waypoint is None:
+        return np.full(moves, np.nan)
+    lat, lon, altitude_km = _geometry(config)
+    flat = np.asarray(waypoint).astype(np.int64)  # row-major over (position, altitude): the altitude varies fastest
+    cell, level = np.divmod(flat, altitude_km.size)
+    row, column = np.divmod(cell, lon.size)
+    target = _embedded(lat[np.clip(row, 0, lat.size - 1)], lon[np.clip(column, 0, lon.size - 1)], level, altitude_km)
+    stood = held["state/position"]
+    here = _embedded(stood[..., 0], stood[..., 1], held["state/altitude"], altitude_km)
+    apart = np.linalg.norm(here - target, axis=-1)[1:]  # one per move, the waypoint standing as that move was taken
+    return np.where(np.arange(1, moves + 1) > opening_moves(config, moves), apart, np.nan)
 
 
 def episode_diagnostics(held: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
@@ -166,6 +211,7 @@ def episode_diagnostics(held: dict[str, Any], config: dict[str, Any]) -> dict[st
     fresh[np.unique(stood, axis=0, return_index=True)[1]] = True  # the first snapshot each distinct cell was stood on
     altitude = held["state/altitude"]  # (moves + 1,) which of the record's altitudes it flew at
     flown = held["objective_state/incumbent"][1:]  # (moves,) the fastest wind stood in by each move
+    apart = episode_distance(held, config)
     legs, after = episode_legs(held, config), np.arange(1, moves + 1) > opening_moves(config, moves)
     finished, arrived = np.zeros(moves + 1), np.zeros(moves + 1)
     np.add.at(finished, legs["ended"].astype(int), 1.0)
@@ -180,6 +226,9 @@ def episode_diagnostics(held: dict[str, Any], config: dict[str, Any]) -> dict[st
         "altitude_changes": np.cumsum(np.abs(np.diff(altitude))),  # (moves,) one unit of resource apiece
         "fastest_wind_flown": flown,
         "arrival_rate": np.where(counted > 0, np.cumsum(arrived)[1:] / np.maximum(counted, 1.0), np.nan),
+        "distance_to_waypoint": apart,
+        "summed_distance": np.cumsum(np.nan_to_num(apart)),  # the navigator's own cost, accumulated over the episode
+
         **shares,
     }
 

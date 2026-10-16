@@ -49,7 +49,10 @@ N_WINDS = 32
 """Draws from the belief the best fixed plan is averaged over. Chosen large rather than tuned: too few makes
 the floor look worse than it is, which widens the gap and flatters the controller"""
 
-SEEDS = range(8)
+SEEDS = range(32)
+"""An episode finishes only about four waypoint legs, so arrival is a mean over four binary draws and its
+spread across eight seeds measured 0.34 -- a standard error of 0.12, too coarse to separate neighbouring
+rungs of the ladder. Thirty-two seeds halve it, and a cell is 70 s"""
 
 BELIEF_TRACKS_SIGMA = False
 """Whether the belief is told how wrong the forecast now is. False leaves its amplitude at the record's own
