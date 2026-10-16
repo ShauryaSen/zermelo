@@ -159,7 +159,9 @@ changes what the experiment measures and is a live question.
 | `mpc_noise_s{0,12,24,48,72,96}` | `mpc` | the controller across the ladder |
 | `bounds_noise_s{…}` | `hind`, `mpc`, `plan` | the three bounds, when hindsight is wanted |
 
-`SEEDS = range(8)`; resources are 4 cpus, 16 GB, 480 min, partition `dean`.
+`SEEDS = range(8)`; resources are 4 cpus, 16 GB, 60 min, partition `dean`. Measured on `dean-cpu-01`, the
+eight seeds of `mpc_noise_s24` take **9 m 55 s end to end in one process** — a two-minute JAX compile and
+about 70 s a seed — so as a Slurm array the whole ladder finishes in minutes.
 
 The three arms differ in exactly two things:
 
@@ -194,5 +196,7 @@ cp /share/dean/sps252/era5_npac_wide.npz ~/zermelo/zermelo/problems/balloon/data
 pixi run check
 pixi run sweep  balloon_waypoint mpc_noise_s24     # one level, serially, in this process
 pixi run submit balloon_waypoint mpc_noise_s24     # the same cells as a Slurm array
-pixi run draw   balloon_waypoint mpc_noise_s24
+
+# `draw` takes the launch DIRECTORY, not the sweep name; a launch is stamped with its start time
+pixi run draw balloon_waypoint results/balloon_waypoint/mpc_noise_s24/2026-10-15_23-33-04
 ```
