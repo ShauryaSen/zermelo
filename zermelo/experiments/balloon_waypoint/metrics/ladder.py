@@ -1,6 +1,10 @@
 """One line a noise level: the controller read across a sweep of forecast error
 
     pixi run python -m zermelo.experiments.balloon_waypoint.metrics.ladder mpc_noise_s0 mpc_noise_s12 ...
+    pixi run python -m zermelo.experiments.balloon_waypoint.metrics.ladder --plot ladder.png winds_noise_s0 ...
+
+A sweep with several arms gives a line per arm, so `winds_noise_s*` draws the score against noise once for
+each `n_winds`. With `--plot` the same table is written as a figure.
 
 `draw` reports one sweep. This reads several and puts them beside each other, which is the whole result of the
 noise experiment: not how the controller does at one error, but how what it achieves moves as the forecast
@@ -37,29 +41,81 @@ def _sigma(config: dict) -> float:
     return float(config["problem"]["error_scale"])
 
 
-def _row(where: Path) -> dict[str, object]:
-    """One sweep's legs, reduced to a line: a mean over seeds and the standard error of that mean"""
-    sweep = latest_launch(where)
-    cells = finished_cells(sweep)
-    _, legs, _ = tables(cells)
+def _measure(legs: pd.DataFrame, column: str) -> tuple[float, float]:
+    """A column's mean over seeds and the standard error of that mean, nan where no seed offers one"""
     flown = legs[legs["flown"] > 0]
-    out: dict[str, object] = {"sigma": _sigma(cells[0][3]), "seeds": int(legs["seed"].nunique())}
-    for name, column, form in COLUMNS:
-        # a leg that flew nowhere is not asked what it closed; the counts are over every leg
-        table = legs if column in ("unreachable", "opening_gap") else flown
-        if column == "flown":
-            per_seed = flown.groupby("seed").size() if not flown.empty else pd.Series(dtype=float)
-        else:
-            per_seed = table.groupby("seed")[column].mean()
-        if per_seed.empty:
-            out[name] = "-"
-            continue
-        spread = float(per_seed.std(ddof=1) / np.sqrt(per_seed.size)) if per_seed.size > 1 else 0.0
-        out[name] = f"{form.format(float(per_seed.mean()))} ± {form.format(spread).lstrip('+')}"
+    # a leg that flew nowhere is not asked what it closed; the counts are over every leg
+    if column == "flown":
+        per_seed = flown.groupby("seed").size() if not flown.empty else pd.Series(dtype=float)
+    else:
+        per_seed = (legs if column in ("unreachable", "opening_gap") else flown).groupby("seed")[column].mean()
+    if per_seed.empty:
+        return float("nan"), float("nan")
+    spread = float(per_seed.std(ddof=1) / np.sqrt(per_seed.size)) if per_seed.size > 1 else 0.0
+    return float(per_seed.mean()), spread
+
+
+def _rows(where: Path) -> list[dict[str, object]]:
+    """One line per arm of one sweep: each measure as a mean over seeds, with its standard error"""
+    cells = finished_cells(latest_launch(where))
+    _, legs, _ = tables(cells)
+    out = []
+    for arm in sorted(legs["arm"].unique()):
+        mine = legs[legs["arm"] == arm]
+        row: dict[str, object] = {"sigma": _sigma(cells[0][3]), "arm": _named(arm), "seeds": int(mine["seed"].nunique())}
+        for name, column, form in COLUMNS:
+            mean, spread = _measure(mine, column)
+            row[name] = "-" if np.isnan(mean) else f"{form.format(mean)} ± {form.format(spread).lstrip('+')}"
+            row[f"_{column}"], row[f"_{column}_se"] = mean, spread  # kept numeric for the figure
+        out.append(row)
     return out
 
 
+def _named(arm: str) -> str:
+    """An arm's own name, without the cell directory's `arm=` and the sweep's own prefix"""
+    token = dict(pair.split("=", 1) for pair in arm.split(",") if "=" in pair).get("arm", arm)
+    return token.rsplit("_", 1)[-1]
+
+
+def _plot(table: pd.DataFrame, into: Path, column: str, label: str) -> None:
+    """Score against noise, a line per arm, with the standard error of each mean as a bar"""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from zermelo.experiments.balloon_waypoint.render.style import Style
+
+    style = Style()
+    figure, panel = plt.subplots(figsize=(6.0, 4.0), dpi=style.dpi)
+    for slot, arm in enumerate(sorted(table["arm"].unique())):
+        mine = table[table["arm"] == arm].sort_values("sigma")
+        panel.errorbar(
+            mine["sigma"],
+            mine[f"_{column}"],
+            yerr=mine[f"_{column}_se"],
+            label=arm,
+            color=style.arm_colours[slot % len(style.arm_colours)],
+            marker="o",
+            markersize=4,
+            capsize=3,
+            linewidth=1.4,
+        )
+    panel.axhline(0.0, color="#999999", linewidth=0.8, zorder=0)  # closing nothing: ending as far off as it set out
+    panel.set_xlabel("forecast error $\\sigma$ (m/s)")
+    panel.set_ylabel(label)
+    panel.spines[["top", "right"]].set_visible(False)
+    if table["arm"].nunique() > 1:
+        panel.legend(frameon=False, title="n_winds" if all(a.startswith("n") for a in table["arm"]) else None)
+    figure.tight_layout()
+    figure.savefig(into)
+    print(f"wrote {into}")
+
+
 def main(asked: list[str]) -> None:
+    into = None
+    if asked and asked[0] == "--plot":
+        into, asked = Path(asked[1]), asked[2:]
     rows = []
     for name in asked:
         where = Path(name) if Path(name).exists() else SWEEPS / name
@@ -67,13 +123,15 @@ def main(asked: list[str]) -> None:
             print(f"skipped {name}: no sweep there", file=sys.stderr)
             continue
         try:
-            rows.append(_row(where))
+            rows.extend(_rows(where))
         except ValueError as unfinished:  # no cell has written a record yet
             print(f"skipped {name}: {unfinished}", file=sys.stderr)
     if not rows:
         sys.exit("no finished sweep among those named")
-    table = pd.DataFrame(sorted(rows, key=lambda row: row["sigma"]))
-    print(table.to_string(index=False))
+    table = pd.DataFrame(sorted(rows, key=lambda row: (row["arm"], row["sigma"])))
+    print(table[[name for name in table.columns if not name.startswith("_")]].to_string(index=False))
+    if into is not None:
+        _plot(table, into, "closed", "share of the opening gap closed")
 
 
 if __name__ == "__main__":

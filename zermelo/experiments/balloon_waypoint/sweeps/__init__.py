@@ -7,6 +7,7 @@ from zermelo.experiments.balloon_waypoint.sweeps import (
     era5_collect,
     era5_collect_continuous,
     era5_mpc_demo,
+    noise_winds,
     smoke,
     utilities,
 )  # noqa: F401

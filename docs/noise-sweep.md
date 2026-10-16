@@ -163,6 +163,7 @@ changes what the experiment measures and is a live question.
 | name | arms | what it is for |
 |---|---|---|
 | `mpc_noise_s{0,12,24,48,72,96}` | `mpc` | the controller across the ladder — **the whole of this experiment** |
+| `winds_noise_s{…}` | `n0`, `n4`, `n16` | the same ladder crossed with `n_winds`: does sampling the belief help more as the forecast decays? |
 
 **The bounds are held back, and not for want of code.** `V_plan ≤ V_mpc ≤ V_hind` is a statement about a
 plan, a policy and hindsight *on one task*. The three arms differ in their belief — `hind` is told the true
@@ -281,6 +282,10 @@ pixi run submit balloon_waypoint mpc_noise_s24     # the same cells as a Slurm a
 
 # `draw` takes a sweep or a launch directory; given a sweep it reads the newest launch under it
 pixi run draw balloon_waypoint results/balloon_waypoint/mpc_noise_s24
+
+# score against noise as a figure, one line per arm
+pixi run python -m zermelo.experiments.balloon_waypoint.metrics.ladder --plot winds.png \
+    winds_noise_s0 winds_noise_s12 winds_noise_s24 winds_noise_s48 winds_noise_s72 winds_noise_s96
 
 # the ladder itself: every level on one line, which is the result of the experiment
 pixi run python -m zermelo.experiments.balloon_waypoint.metrics.ladder \
