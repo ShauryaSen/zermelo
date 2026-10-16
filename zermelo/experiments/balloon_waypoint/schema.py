@@ -163,6 +163,10 @@ class Resources:
     array_parallelism: int = MISSING
     """Cells of one array allowed to run at once, the rest queueing behind them"""
 
+    account: str = "dean"
+    """Scheduler account the cells are charged to, which is not the partition they run on: a user is
+    associated with accounts, and `sacctmgr show assoc where user=$USER` lists the ones they may charge"""
+
 
 @dataclass
 class RunConfig:

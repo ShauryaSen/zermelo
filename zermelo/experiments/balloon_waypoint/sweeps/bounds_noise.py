@@ -67,7 +67,16 @@ what makes the proxy bound differ from the true one. True would calibrate it at 
 NAVIGATION_ONLY: Implementation = {**NAVIGATOR, "resource_weight": 0.0}
 """The paper's solver, its cost the summed distance to the waypoint and nothing else"""
 
-RESOURCES = Resources(cpus=4, mem_gb=16, timeout_min=60, gres=None, partition="dean", constraint=None, array_parallelism=12)
+RESOURCES = Resources(
+    cpus=4,
+    mem_gb=16,
+    timeout_min=60,
+    gres=None,
+    partition="dean",
+    constraint=None,
+    array_parallelism=12,
+    account="kilian",
+)
 """One cell is about 70 s of flying after a two-minute compile, measured on dean-cpu-01 at sigma = 2.4, so an
 hour is about ten times what a cell needs. The three-arm sweeps carry the oracle and the 32-draw plan, which
 are slower, and still sit far inside it"""

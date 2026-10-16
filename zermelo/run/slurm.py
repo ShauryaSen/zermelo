@@ -12,7 +12,7 @@ from omegaconf import II
 class ArrayQueueConf(SlurmQueueConf):
     """Submission settings for one array, read off the sweep's `resources` block."""
 
-    account: str = "dean"
+    account: str = II("resources.account")
 
     timeout_min: int = II("resources.timeout_min")
     cpus_per_task: int = II("resources.cpus")
