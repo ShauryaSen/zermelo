@@ -49,6 +49,12 @@ class ProblemConfig:
     margin_lon: int = MISSING
     """Columns at each edge of the grid that no candidate sits in"""
 
+    continuous: bool = False
+    """Whether the balloon has real coordinates and a climb for an action, or sits on cells and levels"""
+
+    climb_cap_km: float = 0.0
+    """`c`: the most a continuous balloon climbs or descends in one step (unread on the grid)"""
+
 
 @dataclass
 class BeliefKernelConfig:
@@ -123,6 +129,9 @@ class MethodConfig:
 
     opening_legs: int = MISSING
     """Waypoint legs of uniform random walking taken before the rule starts"""
+
+    navigator: Any | None = None
+    """How a continuous balloon flies a leg, as a dotted path with its own arguments (None flies the planner's table on the grid)"""
 
 
 @dataclass

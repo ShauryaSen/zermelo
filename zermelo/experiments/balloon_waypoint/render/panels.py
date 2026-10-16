@@ -1,5 +1,6 @@
 """What one episode looks like over the grid, and the sheets its panels go onto"""
 
+import functools
 from collections.abc import Sequence
 from typing import Any
 
@@ -64,6 +65,16 @@ def _colours(name: str, style: Style) -> Colormap:
     }[name]
 
 
+def _projection(replay: Replay) -> ccrs.Projection:
+    """Plate carree centred on the grid, so a box across the dateline (120-240E, say) draws whole rather than as two strips"""
+    return ccrs.PlateCarree(central_longitude=(replay.extent[0] + replay.extent[1]) / 2)
+
+
+def _frame(ax: Axes, replay: Replay) -> dict[str, Any]:
+    """What a drawing in degrees needs on a map (a transform) and on a plain axes (nothing)"""
+    return {"transform": ccrs.PlateCarree()} if isinstance(ax, GeoAxes) else {}
+
+
 def _place(fig: Figure, left: float, bottom: float, width: float, height: float, **extra: Any) -> Axes:
     """One axes at `(left, bottom)` of size `(width, height)`, every argument in inches from the sheet's bottom left"""
     sheet_width, sheet_height = fig.get_size_inches()
@@ -109,6 +120,7 @@ def raster(ax: Axes, replay: Replay, name: str, move: int, style: Style, *, crop
         interpolation="nearest",
         aspect="auto",  # the axes box is already cut to the grid's aspect: letterboxing again wastes it
         zorder=2,
+        **_frame(ax, replay),
     )
     if not cropped:
         ax.imshow(
@@ -122,9 +134,13 @@ def raster(ax: Axes, replay: Replay, name: str, move: int, style: Style, *, crop
             interpolation="nearest",
             aspect="auto",
             zorder=3,
+            **_frame(ax, replay),
         )
-    ax.set_xlim(replay.extent[0], replay.extent[1])
-    ax.set_ylim(min(replay.extent[2], replay.extent[3]), max(replay.extent[2], replay.extent[3]))
+    if isinstance(ax, GeoAxes):
+        ax.set_extent(replay.extent, crs=ccrs.PlateCarree())
+    else:
+        ax.set_xlim(replay.extent[0], replay.extent[1])
+        ax.set_ylim(min(replay.extent[2], replay.extent[3]), max(replay.extent[2], replay.extent[3]))
     ax.xaxis.set_major_locator(MaxNLocator(nbins=style.ticks_per_axis))
     ax.yaxis.set_major_locator(MaxNLocator(nbins=style.ticks_per_axis))
     ax.tick_params(labelsize=style.tick_size, colors=style.faint, labelcolor=style.ink)
@@ -134,8 +150,8 @@ def raster(ax: Axes, replay: Replay, name: str, move: int, style: Style, *, crop
 
 
 def ladder(ax: Axes, replay: Replay, move: int, style: Style) -> None:
-    """The altitudes as rungs, the one being flown filled, each named in km"""
-    here = int(replay.flown[min(move, replay.flown.size - 1)])
+    """The altitudes as rungs, the one being flown (or nearest) filled, each named in km"""
+    here = int(round(float(replay.flown[min(move, replay.flown.size - 1)])))
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(-0.6, len(replay.altitude_km) - 0.4)
     for level, km in enumerate(replay.altitude_km):
@@ -169,8 +185,8 @@ def ladder(ax: Axes, replay: Replay, move: int, style: Style) -> None:
 
 
 def levels(axes: Sequence[Axes], replay: Replay, move: int, style: Style) -> None:
-    """Every altitude's own speed field across, the cells stood on it marked, the one being flown outlined"""
-    here = int(replay.flown[min(move, replay.flown.size - 1)])
+    """Every altitude's own speed field across, the cells stood on it marked, the one being flown (or nearest) outlined"""
+    here = int(round(float(replay.flown[min(move, replay.flown.size - 1)])))
     span = float(np.max(replay.speed))
     fastest = np.unravel_index(int(np.argmax(replay.speed)), replay.speed.shape)  # the one fastest point of the volume
     lon = np.linspace(replay.extent[0], replay.extent[1], replay.shape[1])
@@ -188,7 +204,7 @@ def levels(axes: Sequence[Axes], replay: Replay, move: int, style: Style) -> Non
             aspect="auto",
             zorder=2,
         )
-        stood = walked[flown == level]
+        stood = walked[np.round(flown) == level]
         if stood.size:
             ax.plot(stood[:, 1], stood[:, 0], "o", ms=style.visited_dot, mew=0.0, alpha=0.75, color=style.trail_colour, zorder=3)
         if level == fastest[0]:
@@ -212,8 +228,10 @@ def track(ax: Axes, replay: Replay, move: int, style: Style) -> None:
     """The altitude flown against move, up to `move`"""
     steps = np.arange(replay.flown.size)
     run = min(max(move, 1), replay.flown.size)
-    ax.step(steps, replay.flown, where="post", color=style.faint, lw=1.0, alpha=0.4, zorder=2)
-    ax.step(steps[:run], replay.flown[:run], where="post", color=style.ink, lw=style.curve_width, zorder=3)
+    smooth = bool(np.any(replay.flown != np.round(replay.flown)))  # a continuous balloon draws a line, a grid balloon stairs
+    line = ax.plot if smooth else functools.partial(ax.step, where="post")
+    line(steps, replay.flown, color=style.faint, lw=1.0, alpha=0.4, zorder=2)
+    line(steps[:run], replay.flown[:run], color=style.ink, lw=style.curve_width, zorder=3)
     ax.plot(steps[run - 1], replay.flown[run - 1], "o", ms=style.live_dot, color=style.actor_colour, zorder=4)
     ax.set_yticks(range(len(replay.altitude_km)))
     ax.set_yticklabels([f"{km:.1f}" for km in replay.altitude_km])
@@ -458,7 +476,7 @@ def detail(fig: Figure, replay: Replay, move: int, style: Style, *, background: 
     floor = style.margin + footer + strip + style.axis_gap + levels_tall + 3 * style.gap
     fig.set_size_inches(sheet_width, _even(floor + style.world_height + style.header + style.margin, float(fig.dpi)))
 
-    main = _place(fig, left, floor, map_wide, style.world_height, projection=ccrs.PlateCarree())
+    main = _place(fig, left, floor, map_wide, style.world_height, projection=_projection(replay))
     image = world(main, replay, move, style, background=background, show_plan=show_plan, named_axes=True)
     _bar(fig, image, (left + map_wide + style.bar_gap, floor, style.bar_thickness, style.world_height), _range(background), style)
     ladder(_place(fig, left + map_wide + named + 3 * style.gap, floor, rung, style.world_height), replay, move, style)
@@ -541,7 +559,7 @@ def compare(fig: Figure, replays: Sequence[Replay], move: int, title: str, style
             style.margin + footer + (down - 1 - row) * (tall + style.title_gap + style.gap),
             wide,
             tall,
-            projection=ccrs.PlateCarree(),
+            projection=_projection(replay),
         )
         world(panel, replay, min(move, replay.n_moves), style, background=background, show_plan=True)
         panel.set_title(_lane(replay, varies), fontsize=style.panel_title_size, color=style.ink, pad=4)
@@ -560,7 +578,7 @@ def contact(fig: Figure, replay: Replay, moves: np.ndarray, style: Style, *, bac
         sheet_width, _even(style.margin + footer + tall + style.title_gap + style.gap + style.header + style.margin, float(fig.dpi))
     )
     for slot, move in enumerate(moves):
-        panel = _place(fig, style.margin + slot * (wide + style.gap), style.margin + footer, wide, tall, projection=ccrs.PlateCarree())
+        panel = _place(fig, style.margin + slot * (wide + style.gap), style.margin + footer, wide, tall, projection=_projection(replay))
         world(panel, replay, int(move), style, background=background, show_plan=True)
         panel.set_title(f"$t = {int(move)}$", fontsize=style.panel_title_size, color=style.ink, pad=4)
     _dress(fig, replay.label, caption(replay, int(moves[-1])), style, marks, columns)

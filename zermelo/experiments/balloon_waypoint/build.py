@@ -13,7 +13,7 @@ from zermelo.experiments.balloon_waypoint.schema import RunConfig
 from zermelo.interface import Agent
 from zermelo.methods.random_agent import RandomAgent
 from zermelo.methods.waypoint_bo.acquisition import Acquisition
-from zermelo.methods.waypoint_bo.agent import WaypointAgent, posterior_moments
+from zermelo.methods.waypoint_bo.agent import GradientAgent, WaypointAgent, posterior_moments
 from zermelo.methods.waypoint_bo.belief import BeliefKernel, GPBelief, OracleBelief
 from zermelo.problems.balloon import (
     GaussianError,
@@ -25,6 +25,8 @@ from zermelo.problems.balloon import (
     balloon_transition,
     balloon_world,
     load_wind,
+    smooth_transition,
+    smoothed,
 )
 from zermelo.run.episode import Episode
 
@@ -53,13 +55,15 @@ def assemble(cfg: RunConfig) -> Episode:
             length_scale_km=cfg.problem.error_lengthscale_km, amplitude_ms=cfg.problem.error_scale, jitter=cfg.problem.error_jitter
         )
     states = balloon_states(grid, tuple(float(h) for h in recording.altitude_km))
-    transition = balloon_transition(recording, states, cfg.problem.step_hours)
+    transition = balloon_transition(recording, states, cfg.problem.step_hours)  # the grid's law: the world's, or the trip pricing
+    dynamics = smooth_transition(recording, states, cfg.problem.step_hours, cfg.problem.climb_cap_km) if cfg.problem.continuous else None
     world = balloon_world(
         recording,
         states,
         forecast=predicted,
         error=error,
-        transition=transition,
+        transition=transition if dynamics is None else dynamics,
+        continuous=cfg.problem.continuous,
         readout=get_class(cfg.problem.readout),
         resource_units=cfg.problem.resource_units,
         margin_lat=cfg.problem.margin_lat,
@@ -95,8 +99,20 @@ def assemble(cfg: RunConfig) -> Episode:
     if cfg.method is None:
         # no rule and no update: it claims the prior every step
         agent = RandomAgent(claim=posterior_moments(belief, jnp.zeros(sum(context.values()))))
+    elif (dynamics is None) != (cfg.method.navigator is None):
+        raise ValueError("a continuous balloon needs a navigator, and a balloon on the grid cannot use one")
     else:
-        agent = WaypointAgent(
+        flown = (
+            {}
+            if dynamics is None
+            else dict(
+                dynamics=dynamics,
+                navigator=instantiate(cfg.method.navigator, _target_whitelist_=WHITELIST),
+                interpolate=lambda table: smoothed(table, grid, n_alt),
+            )
+        )
+        agent = (WaypointAgent if dynamics is None else GradientAgent)(
+            **flown,
             candidates=candidates,
             transition=transition,
             belief=belief,

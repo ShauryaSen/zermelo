@@ -24,8 +24,8 @@ import jax.numpy as jnp
 from jax.tree_util import register_dataclass
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 
-from zermelo.interface import DiscreteDomain, Domain, Function, ProductDomain, Transition, TransitionKernel
-from zermelo.problems.balloon.grid import SphereGrid
+from zermelo.interface import BoxDomain, DiscreteDomain, Domain, Function, ProductDomain, Transition, TransitionKernel
+from zermelo.problems.balloon.grid import SphereGrid, Steps
 
 type Act = Int[Array, ""]
 """0 down one altitude, 1 hold, 2 up one"""
@@ -231,3 +231,58 @@ class BalloonKernel(TransitionKernel[Act]):
         n_alt = self.altitude_at.shape[1]
         per_altitude = jnp.abs(self.altitude_at[action] - jnp.arange(n_alt)).astype(jnp.float32)  # (alt,)
         return jnp.tile(per_altitude, self.next_pos.shape[0] // n_alt)  # (states,), altitude varying fastest
+
+
+@dataclass(frozen=True)
+class SmoothBalloonTransition(Transition[Float[Array, ""]]):
+    """One step of a balloon whose every coordinate is real, written so that s' is differentiable in s and a
+
+    s = (lat, lon, p, r, t, W)   where it is (degrees), its altitude as a fractional level, resource left, hours, the wind
+    a in [-c, c]                 how far to climb this step, in km; negative descends
+    z(p)                         km at level p, read linearly between the record's levels; z^-1 its inverse
+
+        (lat, lon)' = (lat, lon) + (v, u) h 3.6 / km_per_degree(lat)       Drift: exactly with the wind
+        p'          = p + d,  d = clip(z^-1(clip(z(p) + a, z_min, z_max)) - p, -r, r)   Climb: as asked, within the band and the resource
+        r'          = r - |d|                                               Resource: one unit per level crossed
+        t'          = t + h                                                 Clock
+
+    Every operation is linear, a clip, or an interpolation, so `jax.grad` passes through a whole rollout.
+    The wind W is read by the state's own field, which must itself be smooth (`SmoothWind`) for the gradient to mean anything.
+    The world keeps the balloon on the grid (`__call__` clips the position); the pure `step` a planner differentiates does not,
+    since a clip at the edge has no gradient and a plan made against it could never find the way back in.
+    """
+
+    grid: SphereGrid
+    altitudes: Steps
+    """The record's levels and the km each stands for"""
+
+    step_hours: float
+    climb_cap_km: float
+    """`c`: the most the balloon can climb or descend in one step"""
+
+    @property
+    def action_domain(self) -> Domain:
+        """A climb in km, anywhere within the cap"""
+        return BoxDomain((), -self.climb_cap_km, self.climb_cap_km)
+
+    def step(self, state: dict[str, Any], action: Float[Array, ""]) -> dict[str, Any]:
+        """s' given s and a, with no randomness: the pure map a planner differentiates"""
+        wind = state["field"](state)  # (2,) as (u, v)
+        km = jnp.stack([wind[1], wind[0]]) * self.step_hours * 3.6  # (2,) as (lat, lon)
+        position = state["position"] + km / self.grid.km_per_degree(state["position"][0])
+        levels, z = jnp.arange(len(self.altitudes.coordinate)) * 1.0, jnp.asarray(self.altitudes.coordinate)
+        order = jnp.argsort(z)  # interp wants its abscissae increasing; the record's levels may run top down
+        wanted = jnp.interp(jnp.clip(jnp.interp(state["altitude"], levels, z) + action, z.min(), z.max()), z[order], levels[order])
+        moved = jnp.clip(wanted - state["altitude"], -state["balloon_resource"], state["balloon_resource"])
+        return {
+            "position": position,
+            "altitude": state["altitude"] + moved,
+            "balloon_resource": state["balloon_resource"] - jnp.abs(moved),
+            "hours": state["hours"] + self.step_hours,
+        }
+
+    def __call__(self, key: PRNGKeyArray, state: dict[str, Any], action: Float[Array, ""]) -> dict[str, Any]:
+        """The same step with the position clipped onto the grid; the key is unused, the law being deterministic"""
+        corners = jnp.stack([self.grid.coords_of(jnp.zeros(2, jnp.int32)), self.grid.coords_of(self.grid.shape - 1)])  # (2, 2)
+        after = self.step(state, action)
+        return {**after, "position": jnp.clip(after["position"], corners.min(0), corners.max(0)), "field": state["field"]}

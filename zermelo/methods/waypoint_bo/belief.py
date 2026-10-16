@@ -11,7 +11,6 @@ from typing import Any, Self
 import gpjax as gpx
 import jax
 import jax.numpy as jnp
-from gpjax.kernels import RFF
 from gpjax.kernels.base import AbstractKernel
 from gpjax.kernels.stationary.base import StationaryKernel
 from jax.scipy.linalg import solve_triangular
@@ -111,6 +110,12 @@ def lookup(positions: Domain, table: Float[Array, "n_states m"]) -> Function:
     """A field that reads `table` at whatever element it is called on"""
     index = _indexer(positions)
     return lambda x: table[index(x)]
+
+
+def _fourier(x: Float[Array, "n dim"], omega: Float[Array, "n_features dim"]) -> Float[Array, "n features"]:
+    """Random Fourier features of `x` at the frequencies `omega`, already divided by their lengthscales: [cos(x omega^T), sin(x omega^T)]"""
+    z = x @ omega.T
+    return jnp.concatenate([jnp.cos(z), jnp.sin(z)], axis=-1)
 
 
 @register_dataclass
@@ -416,16 +421,33 @@ class GPBelief(Belief):
         f_s(z) = Phi(z) theta_s + k(z, x) v_s,   v_s = (K + noise^2 I)^-1 (y + eps_s - Phi(x) theta_s)
         """
         kernel = self.kernel
-        basis = RFF(base_kernel=kernel, num_basis_fns=self.n_features, key=key)
+        omega = self._frequencies(key)  # (n_features, dim)
         scale = jnp.sqrt(self.amplitude**2 / self.n_features)
         theta = jax.random.normal(key, (n_fields, 2 * self.n_features))  # (n_fields, 2 n_features): row s is path s
-        features = basis.compute_features(query) * scale  # (n_states, 2 n_features)
+        features = _fourier(query, omega) * scale  # (n_states, 2 n_features)
         prior_part = theta @ features.T  # (n_fields, n_states)
         if x.shape[0] == 0:  # nothing read: the draw is from the prior
             return prior_part
         # drawn (n_fields, n_read) then turned: filling the other way round would change path s with n_fields
         eps = self.noise * jax.random.normal(key, (n_fields, x.shape[0])).T  # (n_read, n_fields)
         gram = kernel.gram(x).to_dense() + (self.noise**2 + 1e-6) * jnp.eye(x.shape[0])  # (n_read, n_read)
-        residual = y[:, None] + eps - (basis.compute_features(x) * scale) @ theta.T  # (n_read, n_fields)
+        residual = y[:, None] + eps - (_fourier(x, omega) * scale) @ theta.T  # (n_read, n_fields)
         canonical = jnp.linalg.solve(gram, residual)  # (n_read, n_fields): one factorization, a column per field
         return prior_part + (kernel.cross_covariance(query, x) @ canonical).T
+
+    def _frequencies(self, key: PRNGKeyArray) -> Float[Array, "n_features dim"]:
+        """Frequencies drawn from the product kernel's spectral density, one block of columns per factor:
+
+        a product of stationary kernels over disjoint columns is stationary, and its spectral density is the product of
+        the factors' densities, so each factor's frequencies are drawn from its own density (over its own lengthscales)
+        and laid into the columns it reads; the other columns get zero. gpjax's `RFF` refuses the product outright.
+        """
+        layout = column_layout(self.positions, self.context)
+        dim = max(stop for _, stop in layout.values())
+        omega = jnp.zeros((self.n_features, dim))
+        for factor, k in zip(self.kernel_factors, jax.random.split(key, len(self.kernel_factors)), strict=True):
+            built = factor.build(layout, jnp.ones(()))
+            columns = jnp.asarray([column for name in factor.parts for column in range(*layout[name])])
+            drawn = built.spectral_density.sample(key=k, sample_shape=(self.n_features, columns.shape[0]))  # (n_features, q)
+            omega = omega.at[:, columns].set(drawn / jnp.asarray(factor.lengthscale))
+        return omega

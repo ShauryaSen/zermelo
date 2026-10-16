@@ -24,6 +24,8 @@ RULES = {
     "random": "uniform random actions",
     "random_act": "uniform random actions",
     "random_search": "uniform random waypoint",
+    "mean_mpc": "MPC on the posterior mean",
+    "sampled_mpc": "MPC averaged over 8 belief draws",
     "max_variance": "maximum posterior variance",
     "posterior_spread": "maximum posterior variance",
     "max_magnitude": "largest believed speed",

@@ -170,3 +170,34 @@ def random_walk(max_steps: int, radius: float, target_chunk: int | None, cost_we
         target_chunk=target_chunk,
         cost_weight=cost_weight,
     )
+
+
+# --- navigators: how a continuous balloon flies the leg to a waypoint ------------------------------------------------
+
+
+def first_order_mpc(
+    horizon: int,
+    iterations: int,
+    step_size: float,
+    tolerance: float,
+    resource_weight: float,
+    candidates: int,
+    descend_top: int,
+    perturbation: float,
+    n_winds: int,
+) -> Implementation:
+    """FOMPC (arXiv 2511.07761): `candidates` random plans, the previous plan and coast, scored once; the best `descend_top` refined by
+    normalised gradient descent under `u = tanh(v / 2)`; the cost is the summed distance to the waypoint plus `w` per level of resource,
+    averaged over `n_winds` draws from the belief (zero: the posterior mean alone)"""
+    return _built(
+        "zermelo.methods.waypoint_bo.navigator.GradientMPC",
+        horizon=horizon,
+        iterations=iterations,
+        step_size=step_size,
+        tolerance=tolerance,
+        resource_weight=resource_weight,
+        candidates=candidates,
+        descend_top=descend_top,
+        perturbation=perturbation,
+        n_winds=n_winds,
+    )

@@ -96,8 +96,8 @@ class Replay:
     path: Float[np.ndarray, "snapshots 2"]
     """Where the balloon truly was, as (lat, lon) in degrees"""
 
-    flown: Int[np.ndarray, " snapshots"]
-    """The altitude it flew at"""
+    flown: Float[np.ndarray, " snapshots"]
+    """The altitude it flew at, as a level: whole on the grid, fractional for a continuous balloon"""
 
     balloon_resource: Int[np.ndarray, " snapshots"]
     """What it had left to spend"""
@@ -207,7 +207,7 @@ def read(path: Path) -> Replay:
     snapshots = int(record.reward.shape[0]) + 1
     claim = at_each_snapshot(np.asarray(record.objective_state["claim"]), snapshots, int(record.config["claim_every"])).copy()
     claim[0] = np.nan  # the objective opens with zeros in the shape of a claim, which is not one
-    flown = np.asarray(record.state["altitude"]).astype(int)
+    flown = np.asarray(record.state["altitude"]).astype(float)
 
     index = np.asarray(record.agent_state["scores.waypoint"]) if method is not None else np.zeros(0, int)
     replans = 1 + np.flatnonzero(np.diff(index))  # snapshots at which a new waypoint took force

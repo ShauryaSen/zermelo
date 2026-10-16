@@ -2,11 +2,10 @@
 
 from dataclasses import dataclass
 
-import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Int, PRNGKeyArray
 
-from zermelo.interface import Agent, Decision, Enumerable, Function, Observation
+from zermelo.interface import Agent, Decision, Function, Observation, Uniform
 
 
 @dataclass(frozen=True)
@@ -21,6 +20,5 @@ class RandomAgent(Agent[Int[Array, ""]]):
         return jnp.zeros((), jnp.int32)
 
     def decide(self, key: PRNGKeyArray, agent_state: Int[Array, ""], obs: Observation) -> tuple[Int[Array, ""], Decision]:
-        if not isinstance(obs.legal_actions, Enumerable):
-            raise TypeError(f"acting at random needs an index over the acts, and a {type(obs.legal_actions).__name__} has none")
-        return agent_state + 1, Decision(jax.random.choice(key, jnp.asarray(obs.legal_actions.elements())), self.claim)
+        """One act uniform over the legal ones, finite or boxed"""
+        return agent_state + 1, Decision(Uniform().sample(obs.legal_actions, key), self.claim)

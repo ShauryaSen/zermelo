@@ -128,8 +128,9 @@ class Steps(Domain[Int[Array, ""]], Enumerable[Int[Array, ""]], Embeddable[Int[A
     def size(self) -> int:
         return len(self.coordinate)
 
-    def index_of(self, x: Int[Array, ""]) -> Int[Array, ""]:
-        return jnp.asarray(x, jnp.int32)
+    def index_of(self, x: Int[Array, ""] | Float[Array, ""]) -> Int[Array, ""]:
+        """The step itself, or the nearest one where `x` sits between steps"""
+        return jnp.asarray(jnp.round(x), jnp.int32)
 
     def from_index(self, i: Int[Array, ""]) -> Int[Array, ""]:
         return i
@@ -141,9 +142,9 @@ class Steps(Domain[Int[Array, ""]], Enumerable[Int[Array, ""]], Embeddable[Int[A
         """1"""
         return 1
 
-    def embed(self, x: Int[Array, "*batch"]) -> Float[Array, "*batch 1"]:
-        """coordinate[x]"""
-        return jnp.asarray(self.coordinate)[jnp.asarray(x, jnp.int32)][..., None]
+    def embed(self, x: Int[Array, "*batch"] | Float[Array, "*batch"]) -> Float[Array, "*batch 1"]:
+        """coordinate[x], read linearly between steps where `x` is fractional"""
+        return jnp.interp(x, jnp.arange(len(self.coordinate)), jnp.asarray(self.coordinate))[..., None]
 
     def unembed(self, v: Float[Array, "*batch 1"]) -> Int[Array, "*batch"]:
         """The step nearest `v`"""

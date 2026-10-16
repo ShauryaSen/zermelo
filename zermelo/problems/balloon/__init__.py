@@ -8,15 +8,35 @@ p' = p + a - 1, r' = r - |p' - p|   an altitude change spends one unit of resour
 W = F + e                           the truth is the forecast F the agent is given, plus the error it carries
 
 A plan and a belief are written over (lat, lon, p) alone; r is a scalar the world carries and the
-method prices
+method prices.
+
+Continuous (`SmoothBalloonTransition`): lat, lon and p are real, a is a climb in km, and W is read between records
 """
 
-from zermelo.problems.balloon.field import DriftingWind, ForecastPrior, GaussianError, GEFSError, GridWind, WindError, WindField
+from zermelo.problems.balloon.field import (
+    DriftingWind,
+    ForecastPrior,
+    GaussianError,
+    GEFSError,
+    GridWind,
+    SmoothWind,
+    WindError,
+    WindField,
+    smoothed,
+)
 from zermelo.problems.balloon.grid import SphereGrid, Steps, balloon_states
 from zermelo.problems.balloon.objective import ColumnPeakSpeed, PointSpeed, StormSearch, Target, balloon_candidates
 from zermelo.problems.balloon.readout import BalloonReadout, ColumnWind, PointWind
-from zermelo.problems.balloon.transition import Act, Advection, Ascent, BalloonKernel, BalloonTransition, Factor
-from zermelo.problems.balloon.world import Highest, WindRecord, balloon_objective, balloon_transition, balloon_world, load_wind
+from zermelo.problems.balloon.transition import Act, Advection, Ascent, BalloonKernel, BalloonTransition, Factor, SmoothBalloonTransition
+from zermelo.problems.balloon.world import (
+    Highest,
+    WindRecord,
+    balloon_objective,
+    balloon_transition,
+    balloon_world,
+    load_wind,
+    smooth_transition,
+)
 
 __all__ = [
     "Act",
@@ -36,6 +56,8 @@ __all__ = [
     "Highest",
     "PointSpeed",
     "PointWind",
+    "SmoothBalloonTransition",
+    "SmoothWind",
     "SphereGrid",
     "Steps",
     "StormSearch",
@@ -49,4 +71,6 @@ __all__ = [
     "balloon_transition",
     "balloon_world",
     "load_wind",
+    "smooth_transition",
+    "smoothed",
 ]

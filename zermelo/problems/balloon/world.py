@@ -8,12 +8,12 @@ import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from zermelo.interface import BoxDomain, Domain, Enumerable, FunctionDomain, Prior, ProductDomain, ProductPrior, Uniform, World
+from zermelo.interface import BoxDomain, Domain, Enumerable, FunctionDomain, Prior, ProductDomain, ProductPrior, Transition, Uniform, World
 from zermelo.problems.balloon.field import ForecastPrior, WindError
 from zermelo.problems.balloon.grid import SphereGrid, Steps
 from zermelo.problems.balloon.objective import StormSearch, Target, balloon_candidates, balloon_interior
 from zermelo.problems.balloon.readout import BalloonReadout
-from zermelo.problems.balloon.transition import Advection, Ascent, BalloonTransition, Clock
+from zermelo.problems.balloon.transition import Advection, Ascent, BalloonTransition, Clock, SmoothBalloonTransition
 
 
 class Highest(Prior[Any]):
@@ -89,26 +89,40 @@ def balloon_transition(recording: WindRecord, states: ProductDomain, step_hours:
     return BalloonTransition(Advection(recording.grid, step_hours), Ascent(recording.n_alt), Clock(step_hours), states)
 
 
+def smooth_transition(recording: WindRecord, states: ProductDomain, step_hours: float, climb_cap_km: float) -> SmoothBalloonTransition:
+    """One step of a balloon with real coordinates, over the levels `states` holds"""
+    altitudes = states.parts["altitude"]
+    if not isinstance(altitudes, Steps):
+        raise TypeError(f"a smooth balloon climbs between the record's levels, and the altitude part is a {type(altitudes).__name__}")
+    return SmoothBalloonTransition(recording.grid, altitudes, step_hours, climb_cap_km)
+
+
 def balloon_world(
     recording: WindRecord,
     states: ProductDomain,
     forecast: Float[Array, "alt pos uv"] | Float[Array, "t alt pos uv"],
     error: WindError,
-    transition: BalloonTransition,
+    transition: Transition[Any],
     readout: type[BalloonReadout],
     resource_units: int,
     margin_lat: int,
     margin_lon: int,
     hours: Float[Array, " t"] | None,
+    continuous: bool = False,
 ) -> World:
-    """The problem a forecast poses: the balloon starts over the grid's interior, and the wind is that forecast plus an error"""
+    """The problem a forecast poses: the balloon starts over the grid's interior, and the wind is that forecast plus an error.
+
+    Continuous, the altitude is any real level between the record's first and last, and the wind is read between records.
+    """
     grid = recording.grid
     initial_forecast = forecast if hours is None else forecast[0]  # what the agent is told at the hour it starts
+    altitude = BoxDomain((), 0.0, float(recording.n_alt - 1)) if continuous else states.parts["altitude"]
     return World(
         state_domain=ProductDomain(
             {
                 **states.parts,
                 "position": grid.narrow(balloon_interior(grid, margin_lat, margin_lon)),
+                "altitude": altitude,
                 "balloon_resource": Steps((0.0,) * (resource_units + 1)),
                 "hours": BoxDomain(()),
                 "field": FunctionDomain(grid, BoxDomain((2,))),
@@ -120,7 +134,7 @@ def balloon_world(
                 "altitude": Uniform(),
                 "balloon_resource": Highest(),
                 "hours": Zero(),
-                "field": ForecastPrior(forecast, error, grid, hours),
+                "field": ForecastPrior(forecast, error, grid, hours, smooth=continuous),
             }
         ),
         transition=transition,

@@ -51,3 +51,17 @@ class Analytic[Action, Hypothesis](Protocol):
     def kernel(self, hypothesis: Hypothesis) -> TransitionKernel[Action]:
         """The law under `hypothesis`, precomputed once"""
         ...
+
+
+@runtime_checkable
+class Differentiable[Action](Protocol):
+    """A transition whose step, randomness aside, is a pure map `(state, action) -> state` that `jax.grad` passes through"""
+
+    @property
+    def action_domain(self) -> Domain:
+        """Every action this transition accepts, ever"""
+        ...
+
+    def step(self, state: dict[str, Any], action: Action) -> dict[str, Any]:
+        """s' given s and a, with no randomness: the parts a planner differentiates"""
+        ...
