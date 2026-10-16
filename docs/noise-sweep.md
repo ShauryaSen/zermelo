@@ -16,7 +16,7 @@ here is the one the code runs at; where a number is a choice rather than a measu
 | levels | 6, from 14.8 km to 20.2 km, 1.08 km apart on average |
 | frames | 81, 3 h apart, covering **240 h** |
 | regime | easterlies aloft, westerlies below — the Loon regime |
-| forecast column | ERA5 **24 h earlier** (persistence), RMS of `W − F` = **2.4 m/s** |
+| forecast column | ERA5 **24 h earlier** (persistence), RMS of `W − F` = **2.79 m/s** per component |
 
 The wind drifts under the balloon: the episode runs over the whole record rather than holding one frame
 still, so `W = W(lat, lon, p, t)`.
@@ -65,7 +65,13 @@ waypoint is then chosen and a new leg begins.
 | spatial | Matérn 5/2 | position, altitude | 800 km, 800 km, 800 km, **3.0 levels** |
 | temporal | Matérn 3/2 | hours | 24 h |
 
-with `amplitude = 2.4 m/s` (the record's own `W − F` RMS), `n_features = 256`, pathwise draws.
+with `amplitude = 2.4 m/s`, `n_features = 256`, pathwise draws.
+
+**The amplitude does not match this record.** 2.4 m/s is annotated in the code as the record's own `W − F`
+RMS, but measured on `era5_npac_wide.npz` that RMS is 2.797 in `u` and 2.784 in `v`. The figure appears to
+have been measured on the Southern Hemisphere record the config is still named for. The belief is therefore
+about 16% overconfident in amplitude, and 35% in variance, before any noise is added — the same at every
+level, so it shifts every line together rather than tilting the trend. Left as it is pending Shaurya.
 
 **A mismatch worth naming.** The belief's altitude lengthscale of 3.0 levels assumes the forecast error is
 coherent up the column. The error injected in §6 is drawn *independently per altitude*. So the belief is
@@ -129,8 +135,10 @@ seed, reused at every σ. Sarah's requirement — the same ground truth on every
 forecast — then holds by construction. Corrupting the truth instead would move the ceiling with σ, confound
 "worse forecast" with "different weather", and make the GP's error model correct by construction.
 
-**The ladder.** σ ∈ {0, 1.2, 2.4, 4.8, 7.2, 9.6} m/s — a perfect forecast, then ½, 1, 2, 3 and 4 times the
-record's own persistence error of 2.4 m/s.
+**The ladder.** σ ∈ {0, 1.2, 2.4, 4.8, 7.2, 9.6} m/s — a perfect forecast, then 0.43, 0.86, 1.7, 2.6 and
+3.4 times the record's own persistence error of 2.79 m/s. The values are round in m/s rather than in
+multiples of the real error; re-anchoring them to 2.79 would make the multiples round instead, at the cost
+of comparability with anything already run at these σ.
 
 **σ = 0 is a test, not a data point.** The forecast is then exactly the truth, so the controller must match
 the hindsight bound. If it does not, the harness is wrong.

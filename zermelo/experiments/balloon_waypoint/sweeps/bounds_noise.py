@@ -27,7 +27,7 @@ tenths of a metre per second.
 import dataclasses
 
 from zermelo.experiments.balloon_waypoint.schema import Resources
-from zermelo.experiments.balloon_waypoint.setup import arm, first_order_mpc, posterior_spread, sweep
+from zermelo.experiments.balloon_waypoint.setup import Implementation, arm, posterior_spread, sweep
 from zermelo.experiments.balloon_waypoint.sweeps.era5_collect_continuous import (
     BELIEF,
     CLAIM_EVERY,
@@ -40,8 +40,10 @@ from zermelo.experiments.balloon_waypoint.sweeps.era5_collect_continuous import 
 )
 
 SIGMAS = (0.0, 1.2, 2.4, 4.8, 7.2, 9.6)
-"""Forecast error swept in m/s. The record's own persistence error is 2.4 (the belief's amplitude is set to
-it), so the ladder runs from a perfect forecast through one, two, three and four times the real thing"""
+"""Forecast error swept in m/s, spanning a perfect forecast up to about three and a half times the record's
+own persistence error, which measures 2.79 m/s per component (2.797 in u, 2.784 in v). Note that the
+belief's amplitude is 2.4, a figure carried over from the Southern Hemisphere record, so the belief is
+already a little overconfident at sigma = 0; see docs/noise-sweep.md"""
 
 N_WINDS = 32
 """Draws from the belief the best fixed plan is averaged over. Chosen large rather than tuned: too few makes
@@ -54,7 +56,7 @@ BELIEF_TRACKS_SIGMA = False
 2.4 m/s, so the belief grows overconfident as the forecast decays -- which is what a real flight faces, and
 what makes the proxy bound differ from the true one. True would calibrate it at every level instead"""
 
-NAVIGATION_ONLY = dataclasses.replace(NAVIGATOR, resource_weight=0.0)
+NAVIGATION_ONLY: Implementation = {**NAVIGATOR, "resource_weight": 0.0}
 """The paper's solver, its cost the summed distance to the waypoint and nothing else"""
 
 RESOURCES = Resources(cpus=4, mem_gb=16, timeout_min=480, gres=None, partition="dean", constraint=None, array_parallelism=12)
@@ -68,7 +70,7 @@ def _arms(sigma: float) -> list:
     return [
         arm("hind", dataclasses.replace(rule, open_loop=True), dataclasses.replace(believed, oracle=True)),
         arm("mpc", rule, believed),
-        arm("plan", dataclasses.replace(rule, navigator=dataclasses.replace(NAVIGATION_ONLY, n_winds=N_WINDS), open_loop=True), believed),
+        arm("plan", dataclasses.replace(rule, navigator={**NAVIGATION_ONLY, "n_winds": N_WINDS}, open_loop=True), believed),
     ]
 
 
