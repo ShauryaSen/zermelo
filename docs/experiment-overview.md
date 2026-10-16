@@ -265,40 +265,71 @@ construction. Section 10 explains why this exists.
 
 ## 10. What we have found so far
 
-The first two levels of the ladder came back before the rest, at 32 seeds each:
+The full ladder, 32 seeds at every level, 192 episodes:
 
 | sigma | gap closed | arrived | legs flown | out of reach | opening gap |
 |---|---|---|---|---|---|
 | 0.0 | +0.055 ± 0.099 | 0.366 ± 0.057 | 3.2 ± 0.2 | 0.168 ± 0.060 | 2214 ± 397 km |
 | 1.2 | +0.145 ± 0.068 | 0.380 ± 0.056 | 2.9 ± 0.2 | 0.174 ± 0.057 | 2391 ± 409 km |
+| 2.4 | -0.072 ± 0.146 | 0.316 ± 0.053 | 2.8 ± 0.2 | 0.143 ± 0.055 | 2086 ± 424 km |
+| 4.8 | +0.091 ± 0.102 | 0.229 ± 0.047 | 2.5 ± 0.1 | 0.120 ± 0.049 | 1799 ± 345 km |
+| 7.2 | -0.010 ± 0.210 | 0.154 ± 0.044 | 2.3 ± 0.1 | 0.161 ± 0.046 | 2070 ± 336 km |
+| 9.6 | -0.111 ± 0.132 | 0.109 ± 0.036 | 2.2 ± 0.1 | 0.120 ± 0.049 | 2000 ± 346 km |
 
-**The harness check does not pass.** Sigma zero should have been clearly the best row, and it is nominally
-the worse of the two. The difference sits inside the error bars, so a degraded forecast is not better, but a
-perfect one is not better either, which is what the test required.
+### Arrival degrades with forecast error, smoothly and by a lot
 
-Sigma zero really is a perfect forecast. `GaussianError` builds its draw as `amplitude_ms * cholesky(K) @
-white`, so at zero amplitude the draw is exactly zero, the forecast equals the truth bit for bit, and the
-belief's prior mean is right everywhere.
+Arrival falls from 0.380 at sigma 1.2 to 0.109 at sigma 9.6, decreasing at every step. The difference
+between those two is 0.271 against a combined standard error of 0.067, which is about four standard errors,
+so the effect is solid. Over the whole ladder the controller loses roughly 70 percent of its arrivals.
 
-So the finding is larger than the question we set out to ask: **with a perfect forecast the controller closes
-about five percent of the average leg's gap.** Forecast quality cannot be the binding constraint, because
-removing forecast error entirely does not help.
+The shape has two features worth naming. There is a **plateau at the low end**: sigma 0 and sigma 1.2 are
+indistinguishable at 0.366 and 0.380, so a forecast error up to about 0.43 times the record's own does not
+cost anything measurable. The belief has readings of its own and can absorb that much. Past that the decline
+is **smooth rather than a cliff**, with steps of 0.064, 0.087, 0.075 and 0.045 in arrival as sigma doubles
+and then grows. There is no threshold where the controller falls apart; it degrades in proportion.
 
-The same two rows say why. A leg covers roughly 3,700 km at the absolute best, and the average waypoint is
-2,214 km away — about sixty percent of a maximum that assumes the record's fastest wind blowing in exactly
-the right direction for sixty consecutive hours. Seventeen percent of waypoints are beyond any reach at all.
-The balloon is mostly being asked to do something it cannot do, and under those conditions the accuracy of
-its map is a second-order concern.
+Arrival at sigma 9.6 is 0.109 rather than zero, which is the floor from legs that happen to be short or
+lucky rather than from any navigation.
 
-`near_noise_s*` is the follow-up. If `gap closed` at sigma zero rises clear of the higher levels once every
-waypoint is reachable, the ladder means something and that is the configuration to run it in. If it stays
-flat, the binding constraint is somewhere else and the next suspects are the 20-step MPC horizon against
-2,800 km waypoints, and the altitude budget running out at 36 of 40.
+`legs flown` also declines monotonically, 3.2 down to 2.2. This follows from the above: a leg that fails to
+arrive runs its full 20-move budget, so an episode that fails more often completes fewer legs in its 60
+scored moves.
 
-One caution about small samples: the 8-seed figures that preceded this run gave `gap closed` as −0.27, `out
-of reach` as 0.062 and the opening gap as 1,151 km. Every one of those moved substantially at 32 seeds.
+`out of reach` and `opening gap` stay flat across the ladder, between 0.120 and 0.174 and between 1 799 and
+2 391 km with no trend. That is the check that matters for the comparison: the forecast is **not** changing
+which waypoints get chosen enough to change the task, so the arrival trend is about navigation under noise
+and not about being sent somewhere different.
 
----
+### The absolute level is poor, for a separate reason
+
+Even with a perfect forecast the controller arrives on only 37 percent of legs and closes essentially none
+of the average gap. Sigma zero is genuinely a perfect forecast -- `GaussianError` builds its draw as
+`amplitude_ms * cholesky(K) @ white`, so at zero amplitude the draw is exactly zero and the belief's prior
+mean is right everywhere.
+
+The reason is reachability. A leg covers roughly 3 700 km at the absolute best, granted the fastest wind the
+balloon flew blowing in exactly the right direction for sixty consecutive hours, and the average waypoint is
+around 2 100 km away with 12 to 17 percent beyond any reach at all. The balloon is frequently asked to do
+something it cannot do, which caps what any forecast could buy.
+
+So both things hold at once. The ceiling is set by the waypoint chooser dispatching the balloon too far,
+which is the defect in section 11. The decline from that ceiling is set by forecast quality, cleanly and
+measurably. Raising `margin_lon` so that every waypoint is reachable, which is `near_noise_s*`, should raise
+the ceiling; it is a separate question whether the slope against sigma survives.
+
+### A note on the two measures
+
+Arrival carries the signal and `gap closed` does not: its standard errors run 0.07 to 0.21 against arrival's
+0.04 to 0.06, and it has no visible trend. The reason is that `gap closed` has a heavy left tail. It is
+bounded above by 1 but unbounded below, so a leg that wanders off scores arbitrarily negative and a handful
+of those dominate the mean. Arrival, being bounded in [0, 1], is the better-behaved estimator here. We had
+expected the opposite, on the grounds that a continuous measure beats a binary one.
+
+Both are reported, and the figure draws both panels.
+
+A caution about small samples, since it caught us: the 8-seed figures that preceded this run gave `gap
+closed` as -0.27, `out of reach` as 0.062 and the opening gap as 1 151 km. Every one of those moved
+substantially at 32 seeds.
 
 ## 11. Known defects
 
@@ -372,14 +403,19 @@ manoeuvre without limit — the planner simply does not price it. The predictabl
 budget early and being stuck later, and we do see 36 of 40 used. If a run ever hits 40 we would be measuring
 an exhausted budget instead of a degraded forecast, so it is worth watching.
 
-**Why `gap closed` rather than arrival rate?**
-Arrival is binary over about four legs an episode, so it is a mean of four coin flips; at 8 seeds its
-standard error was 0.12, wider than any difference we expect between adjacent rungs. It was also inflated,
-because a leg counts as arrived if it ends before its 20-move budget, and legs were ending after one move
-having gone nowhere because the acquisition had picked a waypoint already inside the 160 km radius. One
-example: one move, 143 km at the start and 143 km at the end, counted as an arrival. Of nine legs inspected
-by hand, four counted as arrivals and one was a genuine flight. `gap closed` is continuous, so it is also a
-lower-variance estimator.
+**Why report both `gap closed` and arrival rate?**
+Arrival needed fixing before it could be trusted at all. A leg counts as arrived if it ends before its
+20-move budget, and legs were ending after a single move having gone nowhere, because the acquisition had
+picked a waypoint already inside the 160 km radius. One example: one move, 143 km at the start and 143 km at
+the end, counted as an arrival. Of nine legs inspected by hand, four counted as arrivals and one was a
+genuine flight. Restricting to legs that set out past the radius fixed that, and took the reported figure
+from 0.477 to 0.388.
+
+`gap closed` was added because it is scale-free and continuous, and we expected a continuous measure to
+have lower variance than a binary one over only four legs an episode. That turned out to be wrong: on the
+ladder its standard errors ran 0.07 to 0.21 against arrival's 0.04 to 0.06, because it is unbounded below
+and a few legs that wander off dominate the mean. Arrival carries the trend and `gap closed` does not, so
+arrival is the headline and `gap closed` is reported beside it.
 
 **Why not score on the summed distance, which is what the MPC minimises?**
 It is absolute, and the waypoint chooser is unconstrained, so a seed handed a waypoint thousands of km away

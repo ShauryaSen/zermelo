@@ -77,8 +77,17 @@ def _named(arm: str) -> str:
     return token.rsplit("_", 1)[-1]
 
 
-def _plot(table: pd.DataFrame, into: Path, column: str, label: str) -> None:
-    """Score against noise, a line per arm, with the standard error of each mean as a bar"""
+PLOTTED = (
+    ("arrived", "share of legs that arrived"),
+    ("closed", "share of the opening gap closed"),
+)
+"""The panels drawn against noise. Arrival first: it is bounded in [0, 1], where the gap closed has a heavy
+left tail -- a leg that wanders off scores arbitrarily negative -- and measured standard errors on the
+ladder were 0.04 to 0.06 for arrival against 0.07 to 0.21 for the gap closed"""
+
+
+def _plot(table: pd.DataFrame, into: Path) -> None:
+    """Each measure against noise, a line per arm, with the standard error of each mean as a bar"""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -87,26 +96,28 @@ def _plot(table: pd.DataFrame, into: Path, column: str, label: str) -> None:
     from zermelo.experiments.balloon_waypoint.render.style import Style
 
     style = Style()
-    figure, panel = plt.subplots(figsize=(6.0, 4.0), dpi=style.dpi)
-    for slot, arm in enumerate(sorted(table["arm"].unique())):
-        mine = table[table["arm"] == arm].sort_values("sigma")
-        panel.errorbar(
-            mine["sigma"],
-            mine[f"_{column}"],
-            yerr=mine[f"_{column}_se"],
-            label=arm,
-            color=style.arm_colours[slot % len(style.arm_colours)],
-            marker="o",
-            markersize=4,
-            capsize=3,
-            linewidth=1.4,
-        )
-    panel.axhline(0.0, color="#999999", linewidth=0.8, zorder=0)  # closing nothing: ending as far off as it set out
-    panel.set_xlabel("forecast error $\\sigma$ (m/s)")
-    panel.set_ylabel(label)
-    panel.spines[["top", "right"]].set_visible(False)
-    if table["arm"].nunique() > 1:
-        panel.legend(frameon=False, title="n_winds" if all(a.startswith("n") for a in table["arm"]) else None)
+    figure, panels = plt.subplots(1, len(PLOTTED), figsize=(5.2 * len(PLOTTED), 4.0), dpi=style.dpi, squeeze=False)
+    for panel, (column, label) in zip(panels[0], PLOTTED, strict=True):
+        for slot, arm in enumerate(sorted(table["arm"].unique())):
+            mine = table[table["arm"] == arm].sort_values("sigma")
+            panel.errorbar(
+                mine["sigma"],
+                mine[f"_{column}"],
+                yerr=mine[f"_{column}_se"],
+                label=arm,
+                color=style.arm_colours[slot % len(style.arm_colours)],
+                marker="o",
+                markersize=4,
+                capsize=3,
+                linewidth=1.4,
+            )
+        if column == "closed":  # closing nothing: ending as far off as it set out
+            panel.axhline(0.0, color="#999999", linewidth=0.8, zorder=0)
+        panel.set_xlabel("forecast error $\\sigma$ (m/s)")
+        panel.set_ylabel(label)
+        panel.spines[["top", "right"]].set_visible(False)
+        if table["arm"].nunique() > 1:
+            panel.legend(frameon=False, title="n_winds" if all(a.startswith("n") for a in table["arm"]) else None)
     figure.tight_layout()
     figure.savefig(into)
     print(f"wrote {into}")
@@ -131,7 +142,7 @@ def main(asked: list[str]) -> None:
     table = pd.DataFrame(sorted(rows, key=lambda row: (row["arm"], row["sigma"])))
     print(table[[name for name in table.columns if not name.startswith("_")]].to_string(index=False))
     if into is not None:
-        _plot(table, into, "closed", "share of the opening gap closed")
+        _plot(table, into)
 
 
 if __name__ == "__main__":
