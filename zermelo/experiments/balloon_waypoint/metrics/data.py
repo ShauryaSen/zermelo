@@ -237,7 +237,6 @@ def episode_diagnostics(held: dict[str, Any], config: dict[str, Any]) -> dict[st
         "arrival_rate": np.where(counted > 0, np.cumsum(arrived)[1:] / np.maximum(counted, 1.0), np.nan),
         "distance_to_waypoint": apart,
         "summed_distance": np.cumsum(np.nan_to_num(apart)),  # the navigator's own cost, accumulated over the episode
-
         **shares,
     }
 
