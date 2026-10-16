@@ -1,7 +1,6 @@
 """One episode per invocation: `python -m zermelo.experiments.balloon_waypoint +sweep=<name>`"""
 
 import os
-import traceback
 from pathlib import Path
 
 import hydra
@@ -23,16 +22,10 @@ def main(cfg: DictConfig) -> None:
 
     from zermelo.experiments.balloon_waypoint.build import assemble
 
-    jax.config.update("jax_default_matmul_precision", "highest")  # no TF32: one field evaluates alike batched and alone
-
     if os.environ.get("SLURM_JOB_ID") and cfg.resources.gres and jax.default_backend() == "cpu":
-        raise RuntimeError(f"this run asked for {cfg.resources.gres} and its jax runs on the processor: submit with `pixi run -e cuda`")
+        raise RuntimeError(f"this cell asked for {cfg.resources.gres} and its jax runs on the processor: submit with `pixi run -e cuda`")
     settings = resolve(cfg)  # into dataclasses, which refuse a setting nobody gave
-    try:
-        record = assemble(settings).run()
-    except Exception:  # hydra swallows an Exception and reports the job done; a SystemExit reaches the scheduler as a failure
-        traceback.print_exc()
-        raise SystemExit(1) from None
+    record = assemble(settings).run()
     record.save(Path(HydraConfig.get().runtime.output_dir))
 
 

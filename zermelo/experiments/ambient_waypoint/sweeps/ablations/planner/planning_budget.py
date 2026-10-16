@@ -1,11 +1,9 @@
-import dataclasses
-
 from zermelo.experiments.ambient_waypoint.registry import (
     AMBIENT1_CONTROL1,
     CLAIM_EVERY_STEPS,
     HORIZON_LENGTH,
     N_SEEDS,
-    OPENING_STEPS,
+    OPENING_LEGS,
     RECORDED,
     RESOURCES,
     matched_belief,
@@ -16,11 +14,11 @@ from zermelo.experiments.ambient_waypoint.setup import arm, max_magnitude, sweep
 BELIEF = matched_belief(AMBIENT1_CONTROL1)
 
 
-def _method(replan_every: int) -> MethodConfig:
+def _method(max_steps: int) -> MethodConfig:
     """This sweep's held values"""
     return MethodConfig(
         utility=max_magnitude(),
-        planner=value_iteration(replan_every=replan_every, radius=0.5, target_chunk=None),
+        planner=value_iteration(max_steps=max_steps, radius=0.5, target_chunk=None),
         improvement=True,
         n_fields=16,
         n_walks=16,
@@ -28,7 +26,7 @@ def _method(replan_every: int) -> MethodConfig:
         step_rate=0.5,
         steps_from="predicted",
         n_candidates=None,
-        opening_steps=OPENING_STEPS,
+        opening_legs=OPENING_LEGS,
     )
 
 
@@ -39,6 +37,6 @@ sweep(
     claim_every=CLAIM_EVERY_STEPS,
     recorded=RECORDED,
     seeds=range(N_SEEDS),
-    resources=dataclasses.replace(RESOURCES, timeout_min=120),
+    resources=RESOURCES,
     arms=[arm(f"steps{steps}", _method(steps), BELIEF) for steps in (25, 50, 100)],
 )

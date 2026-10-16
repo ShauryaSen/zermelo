@@ -25,16 +25,11 @@ class ArrayQueueConf(SlurmQueueConf):
     wckey: str = ""
     """Empty the submitting library writes a workload key here"""
 
-    additional_parameters: dict[str, Any] = field(
-        default_factory=lambda: {
-            "requeue": True,
-            "exclude": "lil-compute-05,unicorn-compute-03,unicorn-compute-01,bhattacharjee-compute-03,rocky",
-        }
-    )
-    """Requeue asks the scheduler to resubmit an evicted job, which reruns from the start and overwrites itself; the excluded nodes cannot run a job"""
+    additional_parameters: dict[str, Any] = field(default_factory=lambda: {"requeue": True})
+    """Requeue asks the scheduler to resubmit an evicted job, which reruns from the start and overwrites itself"""
 
     setup: list[str] = field(default_factory=lambda: ["export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK"])
-    """Shell run inside a job before it starts. Write shell variables without braces"""
+    """Shell run inside a job before it starts, holding the thread count to what it was given. Write shell variables without braces"""
 
 
 ConfigStore.instance().store(group="hydra/launcher", name="slurm", node=ArrayQueueConf, provider="zermelo")

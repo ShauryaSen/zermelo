@@ -48,24 +48,24 @@ def matched_belief(world: ProblemConfig) -> BeliefConfig:
 PLANNING_BUDGET = 50
 """`L`: a replan fires every `L` moves, costs `L` backups, and truncates a hitting time at `L` steps"""
 
-OPENING_STEPS = 25
-"""time_steps of uniform random walking taken before the rule starts, the same for every arm"""
+OPENING_LEGS = 1
+"""Waypoint legs of uniform random walking taken before the rule starts"""
 
 HORIZON_LENGTH = 2000
 """`T`: moves an episode makes"""
 
-CLAIM_EVERY_STEPS = 1
+CLAIM_EVERY_STEPS = 50
 """Moves between re-readings of the claim off a belief"""
 
 RECORDED = {
     "state/ambient": 1,
     "state/controllable": 1,
     "decision/action": 1,
-    "objective_state/best_possible_magnitude": 1,
-    "objective_state/best_observed_magnitude": 1,
+    "objective_state/oracle": 1,
+    "objective_state/incumbent": 1,
     "objective_state/truth": 1,
     "objective_state/claim": CLAIM_EVERY_STEPS,
-    "agent_state/time_steps_since_waypoint": 1,
+    "agent_state/steps_since_waypoint": 1,
     "agent_state/scores.predicted_step_cost": 1,
     "agent_state/scores.frac_zero_value_candidates": 1,
     "agent_state/scores.frac_reachable_candidates": 1,
@@ -80,13 +80,8 @@ RECORDED = {
 N_SEEDS = 10
 """Instances every arm is run on, seeded `0` to `N_SEEDS - 1`"""
 
-RESOURCES = Resources(
-    cpus=2,
-    mem_gb=12,
-    timeout_min=60,
-    gres="gpu:1",
-    partition="default_partition",
-    constraint="avx2&(gpu-high|gpu-mid|titanxp)",
-    array_parallelism=64,
-)
-"""What one cell of a sweep is given; `avx2` and the GPU classes are node features. A sweep wanting more states its own with `dataclasses.replace`"""
+RESOURCES = Resources(cpus=2, mem_gb=12, timeout_min=60, gres="gpu:1", partition="gpu", constraint="avx2&gpu-high", array_parallelism=64)
+"""What one cell of a sweep is given. A sweep wanting more states its own with `dataclasses.replace`.
+
+`avx2` and `gpu-high` are node features. Dropping either lands cells on nodes where jaxlib fails to
+import or a matrix multiply fails to launch. A cell wanting no device states `avx2` alone"""

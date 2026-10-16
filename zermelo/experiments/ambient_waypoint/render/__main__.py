@@ -17,7 +17,7 @@ from zermelo.experiments.ambient_waypoint.metrics.data import (
 )
 from zermelo.experiments.ambient_waypoint.render.film import film, schedule  # noqa: E402
 from zermelo.experiments.ambient_waypoint.render.panels import RASTER_NAMES, compare, contact, detail  # noqa: E402
-from zermelo.experiments.ambient_waypoint.render.replay import read, runs  # noqa: E402
+from zermelo.experiments.ambient_waypoint.render.replay import cells, read  # noqa: E402
 from zermelo.experiments.ambient_waypoint.render.style import Style  # noqa: E402
 from zermelo.experiments.ambient_waypoint.render.submit import send  # noqa: E402
 
@@ -81,7 +81,7 @@ def draw(chosen: Sequence[Path], into: Path, stem: str, given: argparse.Namespac
 def main() -> None:
     """Everything the arguments name, drawn here or as an array on the scheduler"""
     parse = argparse.ArgumentParser(prog="render", description="Draw recorded episodes of ambient-dynamics.")
-    parse.add_argument("target", type=Path, help="a sweep name, a launch directory, or one run directory")
+    parse.add_argument("target", type=Path, help="a sweep name, a launch directory, or one cell directory")
     parse.add_argument("--arm", help="lay the seeds of this arm side by side, or of every arm with `all`")
     parse.add_argument("--seed", type=int, help="lay the arms at this seed side by side, 0 by default; with --arm, one episode")
     parse.add_argument("--background", default="uncertainty", choices=RASTER_NAMES, help="what a world panel is shaded by")
@@ -95,7 +95,7 @@ def main() -> None:
 
     path = given.target if given.target.exists() else SWEEPS / given.target
     if not path.exists():
-        raise SystemExit(f"no run, launch or sweep at {given.target}")
+        raise SystemExit(f"no cell, launch or sweep at {given.target}")
     style = dataclasses.replace(Style(), dpi=Style().resolutions[given.dpi])
 
     if (path / "record.npz").exists():  # a directory named outright is drawn on its own, whatever else was asked for
@@ -103,7 +103,7 @@ def main() -> None:
     else:
         launch, wanted = latest_launch(path), []
         for arm, seed in lanes(launch, given.arm, given.seed):
-            chosen = runs(launch, seed=None if seed is None else str(seed), arm=arm)
+            chosen = cells(launch, seed=None if seed is None else str(seed), arm=arm)
             asked = " ".join(part for part in (f"--arm {arm}" if arm else "", f"--seed {seed}" if seed is not None else "") if part)
             if len(chosen) == 1:  # an axis with one value on it is one episode, not a comparison of one
                 wanted.append((chosen, chosen[0] / "render", given.background, asked))

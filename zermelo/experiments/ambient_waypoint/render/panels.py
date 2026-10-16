@@ -20,7 +20,7 @@ from zermelo.experiments.ambient_waypoint.render.style import Style, plain_numbe
 RASTER_NAMES = ("truth", "belief", "uncertainty", "error", "acquisition")
 """What a world panel may be shaded by, and what the panels beside it are chosen from"""
 
-LIVE = ("simple_regret", "cumulative_regret", "rmse", "posterior_spread")
+LIVE = ("simple_regret", "cumulative_regret", "reconstruction_error", "posterior_uncertainty")
 """What the strip under a single episode advances through, one panel each"""
 
 TITLES = {
@@ -301,9 +301,17 @@ def keys(style: Style, *, plan: bool, show_belief: bool = False) -> list[Line2D 
     if plan:  # an arm running no rule has no opening, no waypoint and no route
         marks += [
             _walked(style.opening_colour, "initial random rollout", style),
-            Line2D([], [], color=style.imagined_colour, lw=2.6, ls="--", label="planned route to target"),
+            Line2D([], [], color=style.imagined_colour, lw=2.6, ls="--", label="planned rollout to waypoint"),
             Line2D(
-                [], [], color=style.waypoint_colour, marker="X", ls="", mec=style.trail_halo, mew=1.0, ms=13, label=r"target $z^{\star}_t$"
+                [],
+                [],
+                color=style.waypoint_colour,
+                marker="X",
+                ls="",
+                mec=style.trail_halo,
+                mew=1.0,
+                ms=13,
+                label=r"waypoint $z^{\star}_t$",
             ),
             _arrow(style.plan_colour, r"policy $\pi_t$, per cell", style, alpha=0.8),
             Line2D([], [], color=style.faint, lw=1.2, ls=":", label="end of the shared opening"),

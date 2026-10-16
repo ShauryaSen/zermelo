@@ -10,11 +10,11 @@ from jaxtyping import Bool, Float, Int
 
 from zermelo.experiments.ambient_waypoint.metrics.data import (
     CURVE_CHANNELS,
-    acquisition_label,
     at_each_snapshot,
     channels,
     episode_curves,
     opening_moves,
+    rule,
     settings,
 )
 from zermelo.problems.ambient_dynamics import AmbientTransition, PaddedGridDomain, ambient_candidates, ambient_positions
@@ -102,7 +102,7 @@ class Replay:
     """Position index of each of those cells"""
 
     seconds: Float[np.ndarray, " moves"]
-    bytes_held: Float[np.ndarray, " moves"]
+    bytes_held: Int[np.ndarray, " moves"]
 
     plan: Plan | None
     """Absent from an arm with no rule"""
@@ -158,7 +158,7 @@ class Replay:
         return chosen[np.linspace(0, chosen.size - 1, min(count, chosen.size)).round().astype(int)]
 
 
-def runs(launch: Path, *, seed: str | None = None, arm: str | None = None) -> list[Path]:
+def cells(launch: Path, *, seed: str | None = None, arm: str | None = None) -> list[Path]:
     """The directories under `launch`, one per episode, kept to one seed or one arm where asked and sorted by name"""
     found = sorted(path.parent for path in launch.glob("*/record.npz"))
     if seed is None and arm is None:  # many seeds of many arms is a sheet nobody reads: one axis is held by default
@@ -166,7 +166,7 @@ def runs(launch: Path, *, seed: str | None = None, arm: str | None = None) -> li
         seed = seeds[0] if len(seeds) > 1 else None
     kept = [path for path in found if seed in (None, settings(path.name).get("seed")) and arm in (None, settings(path.name).get("arm"))]
     if not kept:
-        raise ValueError(f"{launch} holds no run at seed {seed} of arm {arm}; it holds {[path.name for path in found]}")
+        raise ValueError(f"{launch} holds no cell at seed {seed} of arm {arm}; it holds {[path.name for path in found]}")
     return kept
 
 
@@ -242,7 +242,7 @@ def read(path: Path) -> Replay:
 
     return Replay(
         name=path.name,
-        label=acquisition_label(settings(path.name).get("arm", path.name)),
+        label=rule(settings(path.name).get("arm", path.name)),
         n_moves=int(record.reward.shape[0]),
         shape=(controllable.cells, ambient.cells),
         extent=(float(y.min()) - h / 2, float(y.max()) + h / 2, float(q.min()) - h / 2, float(q.max()) + h / 2),
@@ -251,7 +251,7 @@ def read(path: Path) -> Replay:
         prior_sd=float(belief["amplitude"]),
         cell=cell,
         pad=pad,
-        leg=int(method["planner"]["replan_every"]) if method is not None else int(record.reward.shape[0]),
+        leg=int(method["planner"]["max_steps"]) if method is not None else int(record.reward.shape[0]),
         path=position,
         drift=drift,
         control=np.stack([np.zeros_like(steered), steered], -1),

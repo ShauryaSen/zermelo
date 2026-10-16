@@ -3,7 +3,7 @@ from zermelo.experiments.ambient_waypoint.registry import (
     CLAIM_EVERY_STEPS,
     HORIZON_LENGTH,
     N_SEEDS,
-    OPENING_STEPS,
+    OPENING_LEGS,
     PLANNING_BUDGET,
     RECORDED,
     RESOURCES,
@@ -19,7 +19,7 @@ def _method(*, improvement: bool, step_rate: float) -> MethodConfig:
     """This sweep's held values"""
     return MethodConfig(
         utility=max_magnitude(),
-        planner=value_iteration(replan_every=PLANNING_BUDGET, radius=0.5, target_chunk=None),
+        planner=value_iteration(max_steps=PLANNING_BUDGET, radius=0.5, target_chunk=None),
         improvement=improvement,
         n_fields=16,
         n_walks=16,
@@ -27,7 +27,7 @@ def _method(*, improvement: bool, step_rate: float) -> MethodConfig:
         step_rate=step_rate,
         steps_from="predicted",
         n_candidates=None,
-        opening_steps=OPENING_STEPS,
+        opening_legs=OPENING_LEGS,
     )
 
 

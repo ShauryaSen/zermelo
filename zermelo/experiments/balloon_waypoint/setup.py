@@ -102,16 +102,6 @@ def max_magnitude() -> Implementation:
     return _built("zermelo.methods.waypoint_bo.utility.MaxMagnitude")
 
 
-def sum_magnitude() -> Implementation:
-    """The reading magnitudes among the cells scored, summed"""
-    return _built("zermelo.methods.waypoint_bo.utility.SumMagnitude")
-
-
-def total_variance() -> Implementation:
-    """Minus the posterior variance summed over every candidate state, given where the dataset was read"""
-    return _built("zermelo.methods.waypoint_bo.utility.TotalVariance")
-
-
 def posterior_spread() -> Implementation:
     """The posterior standard deviations at the scored cells, summed"""
     return _built("zermelo.methods.waypoint_bo.utility.PosteriorSpread")
@@ -127,6 +117,11 @@ def expected_improvement() -> Implementation:
     return _built("zermelo.methods.waypoint_bo.utility.ExpectedImprovement")
 
 
+def predictive_confidence() -> Implementation:
+    """Negative predictive entropy over the candidate cells, under the belief re-conditioned on the scored cells"""
+    return _built("zermelo.methods.waypoint_bo.utility.PredictiveConfidence")
+
+
 def uniform() -> Implementation:
     """A draw ignoring the data"""
     return _built("zermelo.methods.waypoint_bo.utility.Uniform")
@@ -136,46 +131,73 @@ def uniform() -> Implementation:
 
 
 def point_speed() -> Implementation:
-    """speed = ||W(state)||"""
+    """`g(W; lat, lon, p) = ||W(lat, lon, p)||`"""
     return _built("zermelo.problems.balloon.objective.PointSpeed")
 
 
 def column_peak_speed(n_alt: int) -> Implementation:
-    """max over altitudes of ||W|| above the state's grid point"""
+    """`g(W; lat, lon, p) = max over p' of ||W(lat, lon, p')||`"""
     return _built("zermelo.problems.balloon.objective.ColumnPeakSpeed", n_alt=n_alt)
 
 
 # --- planners: how the actor is carried to a waypoint, and how that walk is priced ----------------------------------
 
 
-def value_iteration(replan_every: int, radius: float, target_chunk: int | None, cost_weight: float) -> Implementation:
-    """`v_0 = 0`, `v_{k+1}(s) = 0 on arrival, else min over a of c(s, a) + sum over s' of P(s' | s, a) v_k(s')`, `replan_every` rounds"""
+def value_iteration(max_steps: int, radius: float, target_chunk: int | None, cost_weight: float) -> Implementation:
+    """`v_0 = 0`, `v_{k+1}(s) = 0 on arrival, else min over a of c(s, a) + sum over s' of P(s' | s, a) v_k(s')`, `max_steps` rounds"""
     return _built(
         "zermelo.methods.waypoint_bo.planner.ValueIteration",
-        replan_every=replan_every,
+        max_steps=max_steps,
         radius=radius,
         target_chunk=target_chunk,
         cost_weight=cost_weight,
     )
 
 
-def greedy(replan_every: int, radius: float, target_chunk: int | None, cost_weight: float) -> Implementation:
+def greedy(max_steps: int, radius: float, target_chunk: int | None, cost_weight: float) -> Implementation:
     """One backup on the distance to the target: the act whose next cell is nearest it in expectation"""
     return _built(
-        "zermelo.methods.waypoint_bo.planner.Greedy",
-        replan_every=replan_every,
-        radius=radius,
-        target_chunk=target_chunk,
-        cost_weight=cost_weight,
+        "zermelo.methods.waypoint_bo.planner.Greedy", max_steps=max_steps, radius=radius, target_chunk=target_chunk, cost_weight=cost_weight
     )
 
 
-def random_walk(replan_every: int, radius: float, target_chunk: int | None, cost_weight: float) -> Implementation:
+def random_walk(max_steps: int, radius: float, target_chunk: int | None, cost_weight: float) -> Implementation:
     """One uniform act per cell, drawn when the plan is made and the same for every target"""
     return _built(
         "zermelo.methods.waypoint_bo.planner.RandomWalk",
-        replan_every=replan_every,
+        max_steps=max_steps,
         radius=radius,
         target_chunk=target_chunk,
         cost_weight=cost_weight,
+    )
+
+
+# --- navigators: how a continuous balloon flies the leg to a waypoint ------------------------------------------------
+
+
+def first_order_mpc(
+    horizon: int,
+    iterations: int,
+    step_size: float,
+    tolerance: float,
+    resource_weight: float,
+    candidates: int,
+    descend_top: int,
+    perturbation: float,
+    n_winds: int,
+) -> Implementation:
+    """FOMPC (arXiv 2511.07761): `candidates` random plans, the previous plan and coast, scored once; the best `descend_top` refined by
+    normalised gradient descent under `u = tanh(v / 2)`; the cost is the summed distance to the waypoint plus `w` per level of resource,
+    averaged over `n_winds` draws from the belief (zero: the posterior mean alone)"""
+    return _built(
+        "zermelo.methods.waypoint_bo.navigator.GradientMPC",
+        horizon=horizon,
+        iterations=iterations,
+        step_size=step_size,
+        tolerance=tolerance,
+        resource_weight=resource_weight,
+        candidates=candidates,
+        descend_top=descend_top,
+        perturbation=perturbation,
+        n_winds=n_winds,
     )

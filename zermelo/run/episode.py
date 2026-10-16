@@ -161,7 +161,7 @@ class Episode:
             ),
             reward=jnp.stack([m.reward for m in self.moves]),
             time_per_decision=jnp.asarray([m.seconds for m in self.moves]),
-            memory_per_decision=jnp.asarray([float(m.live_bytes) for m in self.moves]),
+            memory_per_decision=jnp.asarray([m.live_bytes for m in self.moves]),
             config=self.config,
             terminated=self.terminated,
             time_per_episode=time.perf_counter() - self.started,

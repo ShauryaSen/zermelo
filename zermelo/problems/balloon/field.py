@@ -1,13 +1,13 @@
 """The wind a balloon is carried by: how it is read, and the law an episode's own is drawn by
 
-W(position, altitude, hours_elapsed) = (u, v)     u eastward, v northward, both m/s
-position            (lat, lon) degrees of a grid point
-altitude            an index into the altitudes the data holds
-hours_elapsed       hours since the episode began
-W = F + forecast_error                            F the forecast the balloon is given
+W(lat, lon, p) = (u, v)     u: eastward, v: northward, both (m/s)
+lat, lon                    degrees, on the grid's own positions
+p                           which altitude, an index into the ones the record holds
+t                           hours since the episode began
 """
 
 import dataclasses
+import itertools
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -15,52 +15,115 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 from jax.tree_util import register_dataclass
-from jaxtyping import Array, Float, PRNGKeyArray
+from jaxtyping import Array, Float, Int, PRNGKeyArray
 
-from zermelo.interface import Domain, FunctionDomain, Prior
+from zermelo.interface import Domain, Function, FunctionDomain, Prior
 from zermelo.problems.balloon.grid import SphereGrid
 
 
 class WindField(ABC):
-    """W over the whole grid, as a function: called at one state it gives the (u, v) there, called at a batch of states it gives one (u, v) per state"""
+    """A read of W at one state"""
 
     @abstractmethod
     def __call__(self, state: dict[str, Any]) -> Float[Array, "*batch uv"]:
-        """(u, v) at each state given"""
+        """(u, v) where the state sits"""
 
 
 @register_dataclass
 @dataclass(frozen=True)
-class TimeVaryingWind(WindField):
-    """W(position, altitude, hours_elapsed), read at the nearest grid point and the nearest hour the frames stand for"""
+class GridWind(WindField):
+    """W(lat, lon, p), held per altitude and position, read at the nearest one"""
 
-    wind_on_grid: Float[Array, "frames alt pos uv"]
-    """(u, v) at every frame, altitude and grid point"""
-
-    frame_hours_elapsed: Float[Array, " frames"]
-    """The hours_elapsed each frame stands for; one frame is a wind that never changes"""
+    wind: Float[Array, "alt pos uv"]
+    """(u, v) at every altitude and position, in the grid's index order"""
 
     grid: SphereGrid = dataclasses.field(metadata=dict(static=True))
     """What `pos` is indexed by"""
 
     def __call__(self, state: dict[str, Any]) -> Float[Array, "*batch uv"]:
-        """wind_on_grid[argmin over frames of |frame_hours_elapsed - hours_elapsed|, altitude, flat index of position]"""
-        gap = jnp.abs(jnp.asarray(state["hours_elapsed"])[..., None] - self.frame_hours_elapsed)  # (*batch, frames)
-        frame = jnp.argmin(gap, axis=-1)  # (*batch,)
-        return self.wind_on_grid[frame, state["altitude"], self.grid.flat_index(state["position"])]
+        """wind[p, pos]"""
+        return self.wind[state["altitude"], self.grid.flat_index(state["position"])]
+
+
+@register_dataclass
+@dataclass(frozen=True)
+class DriftingWind(WindField):
+    """W(lat, lon, p, t), read at the nearest position and hour"""
+
+    wind: Float[Array, "t alt pos uv"]
+    """(u, v) at every hour, altitude and position"""
+
+    hours: Float[Array, " t"]
+    """The t each record stands for"""
+
+    grid: SphereGrid = dataclasses.field(metadata=dict(static=True))
+    """What `pos` is indexed by"""
+
+    def __call__(self, state: dict[str, Any]) -> Float[Array, "*batch uv"]:
+        """wind[argmin |hours - t|, p, pos]"""
+        hours = state["hours"]
+        frame = jnp.argmin(jnp.abs(self.hours[:, None] - jnp.atleast_1d(hours)[None, :]), axis=0).reshape(jnp.shape(hours))
+        return self.wind[frame, state["altitude"], self.grid.flat_index(state["position"])]
+
+
+@register_dataclass
+@dataclass(frozen=True)
+class SmoothWind(WindField):
+    """W(lat, lon, p, t), read linearly between the records it is held at: differentiable in every coordinate
+
+        W(x) = sum over the 16 corners c of the cell x falls in of  prod over axes of (w_axis if c is high else 1 - w_axis) * wind[c]
+
+    with `w_axis` the fraction of the way x sits from the low corner to the high one along (lat, lon, p, t);
+    a coordinate past the last record reads the last record, so W is constant outside the grid.
+    """
+
+    wind: Float[Array, "*winds t alt pos uv"]
+    """(u, v) at every hour, altitude and position; one frame for a wind that never moves. Several winds stacked along
+    leading axes make a batch, read one at a time under `jax.vmap`"""
+
+    hours: Float[Array, "*winds t"]
+    """The t each frame stands for, increasing"""
+
+    grid: SphereGrid = dataclasses.field(metadata=dict(static=True))
+    """What `pos` is indexed by"""
+
+    def __call__(self, state: dict[str, Any]) -> Float[Array, "*batch uv"]:
+        """The weighted sum over the corners around (lat, lon, p, t), for one wind"""
+        n_t, n_alt = self.wind.shape[0], self.wind.shape[1]
+        cell = (state["position"] - self.grid.first) / self.grid.steps  # (..., 2) fractional (row, column)
+        frame = jnp.interp(state.get("hours", jnp.zeros(())), self.hours, jnp.arange(n_t) * 1.0)
+        axes = [cell[..., 0], cell[..., 1], jnp.asarray(state["altitude"]) * 1.0, frame]
+        sizes = [self.grid.n_lat, self.grid.n_lon, n_alt, n_t]
+        lows = [jnp.clip(jnp.floor(x), 0, max(n - 2, 0)).astype(jnp.int32) for x, n in zip(axes, sizes, strict=True)]
+        weights = [jnp.clip(x - lo, 0.0, 1.0) for x, lo in zip(axes, lows, strict=True)]
+        out = jnp.zeros((*cell.shape[:-1], 2))
+        for corner in itertools.product((0, 1), repeat=4):
+            at = [jnp.minimum(lo + c, n - 1) for lo, c, n in zip(lows, corner, sizes, strict=True)]
+            weight = jnp.ones(())
+            for w, c in zip(weights, corner, strict=True):  # multiplied rather than stacked: the axes may carry different batch shapes
+                weight = weight * (w if c else 1.0 - w)
+            out = out + weight[..., None] * self.wind[at[3], at[2], at[0] * self.grid.n_lon + at[1]]
+        return out
+
+
+def smoothed(table: Function, grid: SphereGrid, n_alt: int) -> SmoothWind:
+    """A field held at the grid's cells and levels (a belief's mean, say), made readable between them"""
+    cells = grid.elements()  # (pos, 2)
+    probe = {"position": jnp.tile(cells, (n_alt, 1)), "altitude": jnp.repeat(jnp.arange(n_alt), cells.shape[0])}
+    return SmoothWind(table(probe).reshape(1, n_alt, cells.shape[0], -1), jnp.zeros(1), grid)
 
 
 class WindError(ABC):
-    """Where forecast_error comes from, for a truth W = F + forecast_error"""
+    """Where e comes from, for a truth W = forecast + e"""
 
     @abstractmethod
-    def sample(self, key: PRNGKeyArray, grid: SphereGrid, n_altitudes: int) -> Float[Array, "*frames alt pos uv"]:
-        """One draw of forecast_error at every altitude and grid point, per frame or the same at every frame"""
+    def sample(self, key: PRNGKeyArray, grid: SphereGrid, n_altitudes: int) -> Float[Array, "*hours alt pos uv"]:
+        """One draw of e at every altitude and position"""
 
 
 @dataclass(frozen=True)
 class GaussianError(WindError):
-    """forecast_error ~ N(0, K) over grid points, independently per altitude and per component of (u, v), the same at every hour, with
+    """e ~ N(0, K), independently per altitude and per component of (u, v), with
 
     K(a, b) = amplitude_ms^2 * exp(-||embed(a) - embed(b)||^2 / (2 * length_scale_km^2))
     """
@@ -86,37 +149,42 @@ class GaussianError(WindError):
 @register_dataclass
 @dataclass(frozen=True)
 class GEFSError(WindError):
-    """forecast_error = W - F as the data holds it, the same at every draw"""
+    """e = W - F, the same field at every draw"""
 
-    error: Float[Array, "frames alt pos uv"]
-    """W - F at every frame, altitude and grid point"""
+    error: Float[Array, "*hours alt pos uv"]
+    """W - F at every altitude and position"""
 
-    def sample(self, key: PRNGKeyArray, grid: SphereGrid, n_altitudes: int) -> Float[Array, "frames alt pos uv"]:
-        """`error`, whatever the key"""
+    def sample(self, key: PRNGKeyArray, grid: SphereGrid, n_altitudes: int) -> Float[Array, "*hours alt pos uv"]:
+        """e, whatever the key"""
         return self.error
 
 
 @dataclass(frozen=True)
 class ForecastPrior(Prior[WindField]):
-    """W = F + forecast_error, F fixed and forecast_error taken once per episode"""
+    """W = forecast + e, the forecast fixed and e taken once per episode"""
 
-    forecast: Float[Array, "frames alt pos uv"]
-    """F at every frame, altitude and grid point"""
+    forecast: Float[Array, "alt pos uv"] | Float[Array, "t alt pos uv"]
+    """(u, v) predicted at every altitude and position, and what the agent is told"""
 
     error: WindError
-    """Where forecast_error comes from"""
+    """Where e comes from"""
 
     grid: SphereGrid
     """What `pos` is indexed by"""
 
-    frame_hours_elapsed: Float[Array, " frames"]
-    """The hours_elapsed each frame stands for"""
+    hours: Float[Array, " t"] | None
+    """The t each frame of a drifting forecast stands for, None for one frame that never moves"""
+
+    smooth: bool = False
+    """Whether W is read between records (a continuous balloon) or at the nearest one"""
 
     def sample(self, domain: Domain[WindField], key: PRNGKeyArray) -> WindField:
         """One episode's W"""
         if not isinstance(domain, FunctionDomain):
             raise TypeError(f"a {type(domain).__name__} holds no fields, so none can be drawn from it")
-        error = self.error.sample(key, self.grid, self.forecast.shape[1])  # (alt, pos, uv) or (frames, alt, pos, uv)
-        return TimeVaryingWind(
-            self.forecast + (error if error.ndim == self.forecast.ndim else error[None]), self.frame_hours_elapsed, self.grid
-        )
+        if self.hours is None:
+            wind = self.forecast + self.error.sample(key, self.grid, self.forecast.shape[0])
+            return SmoothWind(wind[None], jnp.zeros(1), self.grid) if self.smooth else GridWind(wind, self.grid)
+        error = self.error.sample(key, self.grid, self.forecast.shape[1])  # (alt, pos, uv) or (t, alt, pos, uv)
+        wind = self.forecast + (error if error.ndim == self.forecast.ndim else error[None])
+        return SmoothWind(wind, self.hours, self.grid) if self.smooth else DriftingWind(wind, self.hours, self.grid)

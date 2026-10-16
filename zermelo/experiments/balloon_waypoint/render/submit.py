@@ -8,7 +8,7 @@ from pathlib import Path
 
 from zermelo.experiments.balloon_waypoint.schema import Resources
 
-RESOURCES_PER_FILM = Resources(cpus=4, mem_gb=12, timeout_min=60, gres=None, partition="dean", constraint="avx2", array_parallelism=8)
+RESOURCES_PER_FILM = Resources(cpus=2, mem_gb=8, timeout_min=10, gres=None, partition="dean", constraint="avx2", array_parallelism=8)
 """What one film is given"""
 
 SCRIPT = """#!/bin/bash

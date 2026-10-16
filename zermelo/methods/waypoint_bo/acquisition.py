@@ -9,8 +9,8 @@ from jax.tree_util import register_dataclass
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 
 from zermelo.interface import Analytic, Subset, TransitionKernel
-from zermelo.methods.waypoint_bo.belief import Belief, Dataset
-from zermelo.methods.waypoint_bo.planner import Planner, Policy, position_of
+from zermelo.methods.waypoint_bo.belief import Belief, Dataset, elements
+from zermelo.methods.waypoint_bo.planner import Planner, Policy
 from zermelo.methods.waypoint_bo.utility import Utility
 
 
@@ -20,7 +20,7 @@ class Scores:
     """One acquisition pass: what each candidate was worth, which won, and how the pass went"""
 
     candidate_indices: Int[Array, " n_candidates"]
-    """The states scored, as position domain indices"""
+    """The cells scored, as position domain indices"""
 
     acquisition_value: Float[Array, " n_candidates"]
     """`alpha` at each of them"""
@@ -28,7 +28,7 @@ class Scores:
     waypoint: Int[Array, ""]
     """`x_{n+1}`: the candidate that won"""
 
-    imagined_walk_to_waypoint: Int[Array, " time_steps"]
+    imagined_walk_to_waypoint: Int[Array, " steps"]
     """The winner's route under the first field and walk"""
 
     waypoint_value_spread: Float[Array, ""]
@@ -67,7 +67,7 @@ class Acquisition:
     """How many candidates to score: `None` every live one, an integer that many drawn uniformly each decision"""
 
     improvement: bool
-    """Whether to score the collected readings and the imagined ones together, less the collected ones alone"""
+    """Whether to score the held readings and the imagined ones together, less the held ones alone"""
 
     step_rate: float | None
     """`lambda`: a full-budget trip costs this share of the spread of the candidate values"""
@@ -87,13 +87,13 @@ class Acquisition:
     def walk_cost(
         self,
         kernel: TransitionKernel[Int[Array, ""]],
-        walk: Int[Array, "n_walks n_candidates time_steps"],
-        moved: Bool[Array, "n_walks n_candidates time_steps"],
+        walk: Int[Array, "n_walks n_candidates steps"],
+        moved: Bool[Array, "n_walks n_candidates steps"],
         policy: Policy,
         start: Int[Array, ""],
         actions: Int[Array, " n_actions"],
     ) -> Float[Array, "n_walks n_candidates"]:
-        """What each walk costs, over the time_steps that moved:
+        """What each walk costs, over the steps that moved:
 
         cost(tau) = sum over t of c(z_t, act(z_t, x)),   z_0 = start
         """
@@ -102,7 +102,7 @@ class Acquisition:
         table = jnp.stack([self.planner.cost(kernel, a) for a in actions], axis=-1)  # (n_states, n_actions): c(s, a)
         at = jnp.concatenate([jnp.full(walk.shape[:-1] + (1,), start), walk[..., :-1]], axis=-1)  # z_t, the state each step left
         column = jnp.arange(walk.shape[1])[None, :, None]  # (1, n_candidates, 1): the target each walk steers to
-        cost = table[at, position_of(actions, policy.act[at, column])]  # (n_walks, n_candidates, time_steps): c(z_t, act(z_t, x))
+        cost = table[at, policy.act[at, column]]  # (n_walks, n_candidates, steps): c(z_t, act(z_t, x))
         return jnp.sum(jnp.where(moved, cost, 0.0), axis=-1)
 
     def choose(
@@ -123,7 +123,7 @@ class Acquisition:
             candidate_indices = jax.random.permutation(k_indices, candidate_indices)[: self.n_candidates]
         # keyed by index, so the draws of a smaller n_walks are a subset of a larger one
         walk_keys = jax.vmap(jax.random.fold_in, in_axes=(None, 0))(k_walk, jnp.arange(max(self.n_walks, 1)))
-        collected_readings, n_scored = belief.data, candidate_indices.shape[0]
+        held, n_scored = belief.data, candidate_indices.shape[0]
         # pi[mu_n], solved once and reused
         mean_policy = self.planner.plan(k_plan, transition.kernel(belief.mean(context)), candidate_indices, actions)
         utility_samples, predicted_samples, rolled_samples, first_draw_walks = [], [], [], None
@@ -133,27 +133,19 @@ class Acquisition:
         score_keys = jax.vmap(jax.random.fold_in, in_axes=(None, 0))(k_utility, jnp.arange(len(fields)))  # keyed by index
         for k_score, field in zip(score_keys, fields, strict=True):
             kernel = transition.kernel(field)  # p(.|f-hat)
-            values = field.table  # f-hat(z, context), one row per state of the position domain
-            # D_n with each reading re-taken from f-hat at its own state and context: the reading itself where readings are exact
-            collected_under_field = Dataset(
-                collected_readings.state_index,
-                field.at_collected_readings,
-                collected_readings.row_is_written,
-                collected_readings.context_value,
-            )
-            base_utility = self.utility(k_score, belief, collected_under_field, candidates) if self.improvement else jnp.zeros(())  # U(D_n)
+            values = field(elements(kernel.domain))  # f-hat(z), one row per cell of the position domain
+            held_under_field = Dataset(held.z, values[held.z], held.live, held.context)  # D_n, its readings re-taken from f-hat
+            base_utility = self.utility(k_score, belief, held_under_field, candidates) if self.improvement else jnp.zeros(())  # U(D_n)
 
             if self.n_walks == 0:  # (1, n_candidates, 1): tau = (x), the destination and no route
                 walk, moved = candidate_indices[None, :, None], jnp.ones((1, n_scored, 1), bool)
-            else:  # both (n_walks, n_candidates, time_steps): tau ~ p(. | z, x, f-hat, pi)
+            else:  # both (n_walks, n_candidates, steps): tau ~ p(. | z, x, f-hat, pi)
                 walk, moved = self.planner.roll(walk_keys, kernel, mean_policy, position)
-            first_draw_walks = (
-                walk[0] if first_draw_walks is None else first_draw_walks
-            )  # (n_candidates, time_steps) under f-hat^(1), tau^(1)
+            first_draw_walks = walk[0] if first_draw_walks is None else first_draw_walks  # (n_candidates, steps) under f-hat^(1), tau^(1)
 
-            # obs(tau) = {(z_i, f-hat(z_i, context), context)}: the walk's states read off f-hat, every row at the decision's own context
+            # obs(tau) = {(z_i, f-hat(z_i), context)}: the walk's cells read off f-hat, every row at the plan's own context
             imagined = Dataset(walk, values[walk], moved, jnp.broadcast_to(context, (*walk.shape, context.shape[-1])))
-            scored = collected_under_field.broadcast(walk.shape[:-1]).concat(imagined) if self.improvement else imagined  # D_n + obs(tau)
+            scored = held_under_field.broadcast(walk.shape[:-1]).concat(imagined) if self.improvement else imagined  # D_n + obs(tau)
             utility_term = self.utility(k_score, belief, scored, candidates) - base_utility  # (n_walks, n_candidates)
             rolled = self.walk_cost(kernel, walk, moved, mean_policy, position, actions).astype(utility_term.dtype)  # cost(tau)
             utility_samples.append(utility_term)

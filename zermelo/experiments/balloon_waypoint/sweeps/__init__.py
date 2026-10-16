@@ -1,11 +1,11 @@
 """Every sweep, registered on import"""
 
-from zermelo.experiments.balloon_waypoint.sweeps import (  # noqa: F401
+from zermelo.experiments.balloon_waypoint.sweeps import (
     acquisitions_oracle,
     acquisitions_real,
-    core,
-    paper,
+    era5_collect,
+    era5_collect_continuous,
+    era5_mpc_demo,
     smoke,
-    static,
     utilities,
-)
+)  # noqa: F401

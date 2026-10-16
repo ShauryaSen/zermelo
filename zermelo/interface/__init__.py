@@ -36,12 +36,13 @@ from zermelo.interface.domain import (
 from zermelo.interface.objective import Objective
 from zermelo.interface.observation import Observation, Readout
 from zermelo.interface.prior import Prior, ProductPrior, Uniform
-from zermelo.interface.transition import Analytic, Transition, TransitionKernel
+from zermelo.interface.transition import Analytic, Differentiable, Transition, TransitionKernel
 from zermelo.interface.world import World
 
 __all__ = [
     "Agent",
     "Analytic",
+    "Differentiable",
     "BoxDomain",
     "Decision",
     "DiscreteDomain",

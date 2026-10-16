@@ -1,5 +1,6 @@
 """What one episode looks like over the grid, and the sheets its panels go onto"""
 
+import functools
 from collections.abc import Sequence
 from typing import Any
 
@@ -17,24 +18,13 @@ from matplotlib.patheffects import withStroke
 from matplotlib.ticker import FuncFormatter, MaxNLocator
 
 from zermelo.experiments.balloon_waypoint.metrics.data import CURVES, settings
-from zermelo.experiments.balloon_waypoint.render.globe import (
-    ALTITUDE_COLOURS,
-    BOX,
-    FASTEST,
-    ROUTE,
-    TRACK,
-    WAYPOINT,
-    Scene,
-    balloon_path,
-    marks,
-)
 from zermelo.experiments.balloon_waypoint.render.replay import Replay
 from zermelo.experiments.balloon_waypoint.render.style import Style, plain_numbers, text_width
 
 RASTER_NAMES = ("truth", "belief", "uncertainty", "error", "acquisition")
 """What the map may be shaded by, and what the panels beside it are chosen from"""
 
-LIVE = ("simple_regret", "average_regret", "rmse", "posterior_variance")
+LIVE = ("simple_regret", "cumulative_regret", "reconstruction_error", "posterior_uncertainty")
 """What the strip under a single episode advances through, one panel each"""
 
 TITLES = {
@@ -75,12 +65,20 @@ def _colours(name: str, style: Style) -> Colormap:
     }[name]
 
 
+def _projection(replay: Replay) -> ccrs.Projection:
+    """Plate carree centred on the grid, so a box across the dateline (120-240E, say) draws whole rather than as two strips"""
+    return ccrs.PlateCarree(central_longitude=(replay.extent[0] + replay.extent[1]) / 2)
+
+
+def _frame(ax: Axes, replay: Replay) -> dict[str, Any]:
+    """What a drawing in degrees needs on a map (a transform) and on a plain axes (nothing)"""
+    return {"transform": ccrs.PlateCarree()} if isinstance(ax, GeoAxes) else {}
+
+
 def _place(fig: Figure, left: float, bottom: float, width: float, height: float, **extra: Any) -> Axes:
     """One axes at `(left, bottom)` of size `(width, height)`, every argument in inches from the sheet's bottom left"""
     sheet_width, sheet_height = fig.get_size_inches()
-    return fig.add_axes(
-        (left / sheet_width, bottom / sheet_height, width / sheet_width, height / sheet_height), facecolor=fig.get_facecolor(), **extra
-    )
+    return fig.add_axes((left / sheet_width, bottom / sheet_height, width / sheet_width, height / sheet_height), **extra)
 
 
 def _bar(fig: Figure, image: AxesImage, rect: tuple[float, float, float, float], label: str | None, style: Style) -> None:
@@ -114,7 +112,7 @@ def raster(ax: Axes, replay: Replay, name: str, move: int, style: Style, *, crop
     low, high = replay.limits(name, move)
     image = ax.imshow(
         replay.raster(name, move),
-        origin="upper" if replay.latitude[0] > replay.latitude[-1] else "lower",
+        origin="lower" if replay.extent[3] > replay.extent[2] else "upper",
         extent=replay.extent,
         cmap=_colours(name, style),
         vmin=low,
@@ -122,6 +120,7 @@ def raster(ax: Axes, replay: Replay, name: str, move: int, style: Style, *, crop
         interpolation="nearest",
         aspect="auto",  # the axes box is already cut to the grid's aspect: letterboxing again wastes it
         zorder=2,
+        **_frame(ax, replay),
     )
     if not cropped:
         ax.imshow(
@@ -135,9 +134,13 @@ def raster(ax: Axes, replay: Replay, name: str, move: int, style: Style, *, crop
             interpolation="nearest",
             aspect="auto",
             zorder=3,
+            **_frame(ax, replay),
         )
-    ax.set_xlim(replay.extent[0], replay.extent[1])
-    ax.set_ylim(min(replay.extent[2], replay.extent[3]), max(replay.extent[2], replay.extent[3]))
+    if isinstance(ax, GeoAxes):
+        ax.set_extent(replay.extent, crs=ccrs.PlateCarree())
+    else:
+        ax.set_xlim(replay.extent[0], replay.extent[1])
+        ax.set_ylim(min(replay.extent[2], replay.extent[3]), max(replay.extent[2], replay.extent[3]))
     ax.xaxis.set_major_locator(MaxNLocator(nbins=style.ticks_per_axis))
     ax.yaxis.set_major_locator(MaxNLocator(nbins=style.ticks_per_axis))
     ax.tick_params(labelsize=style.tick_size, colors=style.faint, labelcolor=style.ink)
@@ -147,8 +150,8 @@ def raster(ax: Axes, replay: Replay, name: str, move: int, style: Style, *, crop
 
 
 def ladder(ax: Axes, replay: Replay, move: int, style: Style) -> None:
-    """The altitudes as rungs, the one being flown filled, each named in km"""
-    here = int(replay.flown[min(move, replay.flown.size - 1)])
+    """The altitudes as rungs, the one being flown (or nearest) filled, each named in km"""
+    here = int(round(float(replay.flown[min(move, replay.flown.size - 1)])))
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(-0.6, len(replay.altitude_km) - 0.4)
     for level, km in enumerate(replay.altitude_km):
@@ -182,18 +185,17 @@ def ladder(ax: Axes, replay: Replay, move: int, style: Style) -> None:
 
 
 def levels(axes: Sequence[Axes], replay: Replay, move: int, style: Style) -> None:
-    """Every altitude's own speed field across, the cells stood on it marked, the one being flown outlined"""
-    here = int(replay.flown[min(move, replay.flown.size - 1)])
-    span = float(np.max(replay.speed))  # over every frame, so the colours hold still through a film
-    now = replay.speed[replay.frame_at(move)]  # (alt, lat, lon) at this move's hour
-    fastest = np.unravel_index(int(np.argmax(now)), now.shape)  # the one fastest point of the volume now
+    """Every altitude's own speed field across, the cells stood on it marked, the one being flown (or nearest) outlined"""
+    here = int(round(float(replay.flown[min(move, replay.flown.size - 1)])))
+    span = float(np.max(replay.speed))
+    fastest = np.unravel_index(int(np.argmax(replay.speed)), replay.speed.shape)  # the one fastest point of the volume
     lon = np.linspace(replay.extent[0], replay.extent[1], replay.shape[1])
     lat = np.linspace(replay.extent[2], replay.extent[3], replay.shape[0])
     walked, flown = replay.path[: move + 1], replay.flown[: move + 1]
     for level, ax in enumerate(axes):
         ax.imshow(
-            now[level],
-            origin="upper" if replay.latitude[0] > replay.latitude[-1] else "lower",
+            replay.speed[level],
+            origin="lower" if replay.extent[3] > replay.extent[2] else "upper",
             extent=replay.extent,
             cmap=style.speed_colours,
             vmin=0.0,
@@ -202,7 +204,7 @@ def levels(axes: Sequence[Axes], replay: Replay, move: int, style: Style) -> Non
             aspect="auto",
             zorder=2,
         )
-        stood = walked[flown == level]
+        stood = walked[np.round(flown) == level]
         if stood.size:
             ax.plot(stood[:, 1], stood[:, 0], "o", ms=style.visited_dot, mew=0.0, alpha=0.75, color=style.trail_colour, zorder=3)
         if level == fastest[0]:
@@ -226,8 +228,10 @@ def track(ax: Axes, replay: Replay, move: int, style: Style) -> None:
     """The altitude flown against move, up to `move`"""
     steps = np.arange(replay.flown.size)
     run = min(max(move, 1), replay.flown.size)
-    ax.step(steps, replay.flown, where="post", color=style.faint, lw=1.0, alpha=0.4, zorder=2)
-    ax.step(steps[:run], replay.flown[:run], where="post", color=style.ink, lw=style.curve_width, zorder=3)
+    smooth = bool(np.any(replay.flown != np.round(replay.flown)))  # a continuous balloon draws a line, a grid balloon stairs
+    line = ax.plot if smooth else functools.partial(ax.step, where="post")
+    line(steps, replay.flown, color=style.faint, lw=1.0, alpha=0.4, zorder=2)
+    line(steps[:run], replay.flown[:run], color=style.ink, lw=style.curve_width, zorder=3)
     ax.plot(steps[run - 1], replay.flown[run - 1], "o", ms=style.live_dot, color=style.actor_colour, zorder=4)
     ax.set_yticks(range(len(replay.altitude_km)))
     ax.set_yticklabels([f"{km:.1f}" for km in replay.altitude_km])
@@ -259,15 +263,14 @@ def world(
     image = raster(ax, replay, background, move, style)
     _geography(ax, replay, style)
     here = int(replay.flown[min(move, replay.flown.size - 1)])
-    frame = replay.frame_at(move)
     lon = np.linspace(replay.extent[0], replay.extent[1], replay.shape[1])
     lat = np.linspace(replay.extent[2], replay.extent[3], replay.shape[0])
-    # one arrow per cell; length carries speed, the fastest wind of the episode drawing `arrow_span` of the panel wide
+    # one arrow per cell; length carries speed, the fastest wind in the volume drawing `arrow_span` of the panel wide
     ax.quiver(
         lon,
         lat,
-        replay.wind[frame, here, :, :, 0],
-        replay.wind[frame, here, :, :, 1],
+        replay.wind[here, :, :, 0],
+        replay.wind[here, :, :, 1],
         color=style.arrow_colour,
         width=style.arrow_width,
         headwidth=style.arrow_head,
@@ -278,8 +281,7 @@ def world(
         zorder=6,
         transform=ccrs.PlateCarree(),
     )
-    now = replay.speed[frame]
-    fastest = np.unravel_index(int(np.argmax(now)), now.shape)  # the one fastest point of the volume now
+    fastest = np.unravel_index(int(np.argmax(replay.speed)), replay.speed.shape)  # the one fastest point of the volume
     if fastest[0] == here:
         ax.plot(
             lon[fastest[2]],
@@ -366,8 +368,8 @@ def keys(style: Style, *, plan: bool) -> list[Line2D | Patch]:
     ]
     if plan:  # an arm running no rule has no opening, no waypoint and no route
         marks += [
-            Line2D([], [], color=style.imagined_colour, lw=2.6, ls="--", label="planned route to target"),
-            Line2D([], [], color=style.waypoint_colour, marker="X", ls="", mec=style.trail_halo, mew=1.0, ms=13, label="target"),
+            Line2D([], [], color=style.imagined_colour, lw=2.6, ls="--", label="planned route to waypoint"),
+            Line2D([], [], color=style.waypoint_colour, marker="X", ls="", mec=style.trail_halo, mew=1.0, ms=13, label="waypoint"),
             Line2D([], [], color=style.faint, lw=1.2, ls=":", label="end of the shared opening"),
         ]
     marks.append(Patch(facecolor=style.pad_wash, alpha=style.pad_alpha, edgecolor=style.faint, lw=0.8, label="margin, no candidate scored"))
@@ -385,7 +387,7 @@ def caption(replay: Replay, move: int) -> str:
     here = int(replay.flown[min(move, replay.flown.size - 1)])
     left = int(replay.balloon_resource[min(move, replay.balloon_resource.size - 1)])
     return (
-        f"{replay.name}      $t = {move}$ of ${replay.n_moves}$      {replay.hours[min(move, replay.hours.size - 1)]:.0f} h      "
+        f"{replay.name}      $t = {move}$ of ${replay.n_moves}$      "
         f"{replay.altitude_km[here]:.1f} km      resource: {left}      "
         f"replans: {_plans(replay, move)}      planning time: {spent / 60:.1f} min"
     )
@@ -474,7 +476,7 @@ def detail(fig: Figure, replay: Replay, move: int, style: Style, *, background: 
     floor = style.margin + footer + strip + style.axis_gap + levels_tall + 3 * style.gap
     fig.set_size_inches(sheet_width, _even(floor + style.world_height + style.header + style.margin, float(fig.dpi)))
 
-    main = _place(fig, left, floor, map_wide, style.world_height, projection=ccrs.PlateCarree())
+    main = _place(fig, left, floor, map_wide, style.world_height, projection=_projection(replay))
     image = world(main, replay, move, style, background=background, show_plan=show_plan, named_axes=True)
     _bar(fig, image, (left + map_wide + style.bar_gap, floor, style.bar_thickness, style.world_height), _range(background), style)
     ladder(_place(fig, left + map_wide + named + 3 * style.gap, floor, rung, style.world_height), replay, move, style)
@@ -518,93 +520,6 @@ def detail(fig: Figure, replay: Replay, move: int, style: Style, *, background: 
     _dress(fig, replay.label, caption(replay, move), style, marks, across)
 
 
-def globe_keys(replay: Replay) -> list[Line2D | Patch]:
-    """The key to the globe: a balloon per altitude, the track, the route, the waypoint, the fastest wind in the box, the box"""
-    held: list[Line2D | Patch] = [
-        Line2D(
-            [],
-            [],
-            marker=balloon_path(),
-            ls="",
-            ms=15,
-            mfc=ALTITUDE_COLOURS[level],
-            mec="#12181f",
-            mew=0.8,
-            label=f"balloon at {km:.1f} km",
-        )
-        for level, km in enumerate(replay.altitude_km)
-    ]
-    held += [
-        Line2D([], [], color=TRACK, lw=3.0, label="trajectory"),
-        Line2D([], [], color=FASTEST, marker="*", ls="", mfc="none", mew=1.3, ms=15, label="fastest wind in the box, at this altitude"),
-        Line2D([], [], color=BOX, lw=1.4, label="candidate box"),
-    ]
-    if replay.plan is not None:
-        held += [
-            Line2D([], [], color=ROUTE, lw=1.8, ls="--", label="planned route to target"),
-            Line2D([], [], color=WAYPOINT, marker="X", ls="", mec="#12181f", mew=0.8, ms=12, label="target"),
-        ]
-    return held
-
-
-def globe(fig: Figure, replay: Replay, move: int, style: Style, scene: Scene) -> None:
-    """One move at full size on the globe, the four rasters over the box beside it, and the curves so far under both"""
-    beside = [name for name in RASTER_NAMES if name != "truth" and (name != "acquisition" or replay.plan is not None)]
-    lat_min, lat_max, lon_min, lon_max = replay.box
-    named = style.bar_gap + style.bar_thickness + style.bar_ticks + style.bar_name
-    tall = (style.world_height - style.gap - 2 * style.title_gap - style.tick_gap) / 2
-    wide = tall * (lon_max - lon_min + 1.0) / (lat_max - lat_min + 1.0) / replay.aspect
-    column = style.gap + wide + named
-    held = globe_keys(replay)
-    left = style.margin
-    content = style.world_height + 3 * style.gap + style.tick_gap + 2 * column
-    longest = caption(replay, replay.n_moves)
-    sheet_width = _even(max(left + content + style.margin, _written(fig, replay.label, longest, style)), float(fig.dpi))
-    across, footer = _footer(fig, held, style, sheet_width)
-    strip = style.axis_gap + style.strip_height + style.gap
-    floor = style.margin + footer + strip + style.gap
-    fig.set_size_inches(sheet_width, _even(floor + style.world_height + style.header + style.margin, float(fig.dpi)))
-
-    picture = scene.frame(replay, move)
-    main = _place(fig, left, floor, style.world_height, style.world_height)
-    main.imshow(picture, extent=(0, scene.camera.size, scene.camera.size, 0), interpolation="bilinear", zorder=1)
-    main.set_xlim(0, scene.camera.size)
-    main.set_ylim(scene.camera.size, 0)
-    main.axis("off")
-    marks(main, scene.camera, replay, move)
-
-    block = left + style.world_height + 3 * style.gap + style.tick_gap
-    starts = (block, block + column)
-    for slot, name in enumerate(beside):
-        row, over = slot // 2, slot % 2
-        panel = _place(fig, starts[over], floor + style.tick_gap + (1 - row) * (tall + style.title_gap + style.gap), wide, tall)
-        small = raster(panel, replay, name, move, style, cropped=True)
-        panel.set_xlim(lon_min - 0.5, lon_max + 0.5)  # the box alone, half a cell past its outer centres
-        panel.set_ylim(lat_min - 0.5, lat_max + 0.5)
-        _bar(
-            fig,
-            small,
-            (starts[over] + wide + style.bar_gap, panel.get_position().y0 * fig.get_size_inches()[1], style.bar_thickness, tall),
-            SYMBOLS[name],
-            style,
-        )
-        panel.tick_params(labelleft=over == 0, labelbottom=row == 1)
-        panel.set_title(TITLES[name], fontsize=style.panel_title_size, color=style.ink, pad=5)
-
-    lanes = (*LIVE, "altitude")
-    span = sheet_width - left - style.axis_gap - style.margin
-    each = (span - (len(lanes) - 1) * style.strip_gap) / len(lanes)
-    for slot, name in enumerate(lanes):
-        panel = _place(
-            fig, left + style.axis_gap + slot * (each + style.strip_gap), style.margin + footer + style.axis_gap, each, style.strip_height
-        )
-        if name == "altitude":
-            track(panel, replay, move, style)
-        else:
-            progress(panel, replay, name, move, style)
-    _dress(fig, replay.label, caption(replay, move), style, held, across)
-
-
 def survey(replays: Sequence[Replay], move: int) -> str:
     """One line of state for a sheet of many episodes: how many lanes, what they hold fixed, and how far in"""
     rules = {replay.label for replay in replays}
@@ -644,7 +559,7 @@ def compare(fig: Figure, replays: Sequence[Replay], move: int, title: str, style
             style.margin + footer + (down - 1 - row) * (tall + style.title_gap + style.gap),
             wide,
             tall,
-            projection=ccrs.PlateCarree(),
+            projection=_projection(replay),
         )
         world(panel, replay, min(move, replay.n_moves), style, background=background, show_plan=True)
         panel.set_title(_lane(replay, varies), fontsize=style.panel_title_size, color=style.ink, pad=4)
@@ -663,7 +578,7 @@ def contact(fig: Figure, replay: Replay, moves: np.ndarray, style: Style, *, bac
         sheet_width, _even(style.margin + footer + tall + style.title_gap + style.gap + style.header + style.margin, float(fig.dpi))
     )
     for slot, move in enumerate(moves):
-        panel = _place(fig, style.margin + slot * (wide + style.gap), style.margin + footer, wide, tall, projection=ccrs.PlateCarree())
+        panel = _place(fig, style.margin + slot * (wide + style.gap), style.margin + footer, wide, tall, projection=_projection(replay))
         world(panel, replay, int(move), style, background=background, show_plan=True)
         panel.set_title(f"$t = {int(move)}$", fontsize=style.panel_title_size, color=style.ink, pad=4)
     _dress(fig, replay.label, caption(replay, int(moves[-1])), style, marks, columns)

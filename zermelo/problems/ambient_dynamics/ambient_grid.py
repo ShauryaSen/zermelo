@@ -55,9 +55,9 @@ class GridDomain(Domain[Float[Array, " axes"]], Enumerable[Float[Array, " axes"]
         """True where `x` already sits exactly on a cell of this grid"""
         return jnp.allclose(self.project(x), x)
 
-    def narrow(self, mask: Bool[Array, " n"]) -> Subset[Float[Array, " axes"]]:
-        """This grid restricted to the cells `mask` marks, in this grid's own index order"""
-        return Subset(self, mask)
+    def narrow(self, witness: Bool[Array, " n"]) -> Subset[Float[Array, " axes"]]:
+        """This grid restricted to the cells `witness` marks, in this grid's own index order"""
+        return Subset(self, witness)
 
     def size(self) -> int:
         """How many elements: cells ** n_axes"""
