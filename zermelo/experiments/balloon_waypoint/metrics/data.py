@@ -168,9 +168,16 @@ def episode_legs(held: dict[str, Any], config: dict[str, Any]) -> dict[str, np.n
 
 
 def _geometry(config: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """The record's own latitudes, longitudes and altitudes, read from the file the problem names"""
+    """The degrees and altitudes of the grid the balloon flies on, from the file the problem names
+
+    The cells are `first + i * step` rather than the file's own axis, which is how `load_wind` builds the
+    `SphereGrid` the waypoint indexes into; on a uniform axis the two agree.
+    """
     with np.load(config["problem"]["wind_path"]) as npz:
-        return np.asarray(npz["lat"]), np.asarray(npz["lon"]), np.asarray(npz["altitude_km"])
+        latitude, longitude, altitude_km = npz["latitude"], npz["longitude"], np.asarray(npz["altitude_km"])
+    lat = latitude[0] + (latitude[1] - latitude[0]) * np.arange(len(latitude))
+    lon = longitude[0] + (longitude[1] - longitude[0]) * np.arange(len(longitude))
+    return lat, lon, altitude_km
 
 
 def _embedded(lat: Any, lon: Any, level: Any, altitude_km: np.ndarray) -> np.ndarray:
