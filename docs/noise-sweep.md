@@ -279,8 +279,15 @@ pixi run check
 pixi run sweep  balloon_waypoint mpc_noise_s24     # one level, serially, in this process
 pixi run submit balloon_waypoint mpc_noise_s24     # the same cells as a Slurm array
 
-# `draw` takes the launch DIRECTORY, not the sweep name; a launch is stamped with its start time
-pixi run draw balloon_waypoint results/balloon_waypoint/mpc_noise_s24/2026-10-15_23-33-04
+# `draw` takes a sweep or a launch directory; given a sweep it reads the newest launch under it
+pixi run draw balloon_waypoint results/balloon_waypoint/mpc_noise_s24
+
+# the ladder itself: every level on one line, which is the result of the experiment
+pixi run python -m zermelo.experiments.balloon_waypoint.metrics.ladder \
+    mpc_noise_s0 mpc_noise_s12 mpc_noise_s24 mpc_noise_s48 mpc_noise_s72 mpc_noise_s96
+
+# all six levels at once on one box, when the scheduler is not available
+for s in 0 12 24 48 72 96; do nohup pixi run sweep balloon_waypoint mpc_noise_s$s > ~/noise_s$s.log 2>&1 & done
 ```
 
 ## 10. What one level looks like
