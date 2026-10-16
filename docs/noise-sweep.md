@@ -156,8 +156,18 @@ changes what the experiment measures and is a live question.
 
 | name | arms | what it is for |
 |---|---|---|
-| `mpc_noise_s{0,12,24,48,72,96}` | `mpc` | the controller across the ladder |
-| `bounds_noise_s{…}` | `hind`, `mpc`, `plan` | the three bounds, when hindsight is wanted |
+| `mpc_noise_s{0,12,24,48,72,96}` | `mpc` | the controller across the ladder — **the whole of this experiment** |
+
+**The bounds are held back, and not for want of code.** `V_plan ≤ V_mpc ≤ V_hind` is a statement about a
+plan, a policy and hindsight *on one task*. The three arms differ in their belief — `hind` is told the true
+field, `plan` averages 32 draws — and each arm chooses its waypoint off its own belief, so each flies to a
+different sequence of targets. Three summed distances over three different problems have a ratio, but that
+ratio is not a bound. The objection applies just as much to the arrival rate, so it is not an artefact of
+scoring navigation.
+
+A bound needs **one waypoint sequence shared by all three arms**, so that the navigator is the only thing
+that differs. That is a change to how an arm is composed, not a sweep, and it is the separate experiment.
+The arms below are left defined and unregistered, ready for it.
 
 `SEEDS = range(32)`; resources are 4 cpus, 16 GB, 60 min, partition `dean`. Measured on `dean-cpu-01`, the
 eight seeds of `mpc_noise_s24` take **9 m 55 s end to end in one process** — a two-minute JAX compile and
@@ -171,7 +181,7 @@ The three arms differ in exactly two things:
 | `mpc` | `GPBelief` | every move |
 | `plan` | `GPBelief`, `n_winds = 32` | once a leg |
 
-and the number they are read through is
+and the number they would be read through is
 
 ```
 (V_mpc − V_plan) / (V_hind − V_plan)
@@ -198,7 +208,30 @@ and standing waypoint it already stores — so no simulation code is involved in
 1 meaning the controller captures everything closed-loop control can buy, 0 meaning it does no better than
 committing to a plan and flying it blind.
 
-## 8. Decisions that are still open
+## 8. How the controller is scored
+
+The ladder is read on three numbers, in rising order of how much they are worth trusting:
+
+| | | |
+|---|---|---|
+| `arrived` | share of legs inside the radius within the budget | binary, four draws an episode: noisy |
+| `V`, `distance a leg` | the navigator's own cost, in km | **absolute, so dominated by how far the waypoint was** |
+| `gap closed` | `1 − d_j(k_j) / d_j(1)` a leg, meaned | scale-free: the share of the opening gap taken out |
+
+**Why a scale-free number is needed at all.** At σ = 2.4 the summed distance measured 88 445 km with a
+standard deviation of 100 308 — wider than its own mean. The waypoint chooser is unconstrained here
+(`reachable = 1.000`), so it may pick a target thousands of km away that no twenty-move leg can approach,
+and a seed handed a far waypoint accumulates enormous distance however well it flies. `V` therefore carries
+the acquisition rule's taste as its loudest signal, with navigation underneath it. Worse for a sweep: the
+forecast is what the belief is built on, so **σ changes which waypoints get chosen**, and an absolute
+distance would confound "flew worse" with "was sent further".
+
+`gap closed` divides that out. It is one per leg, bounded above by 1, and it answers the question the
+experiment is actually asking: of the distance it was given to cover, how much did the controller take out?
+
+`V` is still reported, because it is what the MPC minimises and the bounds experiment will need it.
+
+## 8a. Decisions that are still open
 
 1. Open loop is **once a leg**, not once an episode. A leg is the natural unit because waypoints are
    rechosen; per episode would be a lower and different bound.
@@ -206,6 +239,7 @@ committing to a plan and flying it blind.
 3. The hindsight horizon — matched to the 20-move budget, the full 80-move episode, or both.
 4. `n_winds = 32` for the floor, chosen large rather than tuned; the convergence check is plan agreement
    against `N = 64`, not cost, since Monte Carlo error always looks like it is settling.
+5. How the three arms are made to share a waypoint sequence, which is what the bounds wait on.
 
 ## 9. Running it
 

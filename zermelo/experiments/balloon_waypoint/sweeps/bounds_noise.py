@@ -1,4 +1,9 @@
-"""The three bounds as the forecast is made worse: hindsight, our controller, and the best fixed plan.
+"""The controller as the forecast is made worse, and the arms a bound over it would need.
+
+Only `mpc_noise_s*` is registered. The three-arm `bounds_noise_s*` sweeps are held back: see
+`BOUNDS_NEED_A_COMMON_WAYPOINT` below for why they would not be bounds as the arms stand.
+
+The three bounds as the forecast is made worse: hindsight, our controller, and the best fixed plan.
 
 The truth is the record's own ERA5 at every level of noise (`forecast="noisy"`), so only what the balloon
 believes changes. Three arms differ in exactly two things, the belief and the moment of solving:
@@ -80,8 +85,20 @@ def _arms(sigma: float) -> list:
     ]
 
 
+BOUNDS_NEED_A_COMMON_WAYPOINT = """The three arms cannot be read as bounds while each chooses its own waypoints.
+
+`V_plan <= V_mpc <= V_hind` holds between a plan, a policy and hindsight *on one task*. The arms here differ
+in their belief -- `hind` is told the true field, `plan` averages 32 draws -- and the waypoint is chosen off
+that belief, so each arm flies to a different sequence of targets. Their summed distances are then three
+numbers about three different problems, and their ratio is not a bound. The same objection applies to the
+arrival rate, so it is not a consequence of how navigation is scored.
+
+What the bounds need is one waypoint sequence shared by all three arms, so that only the navigator differs.
+That is a change to how an arm is composed rather than a sweep, and it is deliberately left undone here."""
+
 for _sigma in SIGMAS:
-    # the controller alone at one noise level: what a day's run needs, and the middle line of the three
+    # the controller alone at one noise level: the whole of this sweep, the bounds held back until the arms
+    # can be made to share a waypoint sequence (see BOUNDS_NEED_A_COMMON_WAYPOINT)
     sweep(
         f"mpc_noise_s{int(round(_sigma * 10))}",
         problem=dataclasses.replace(ERA5_SH_JUL2021, forecast="noisy", error_scale=_sigma),
@@ -91,16 +108,6 @@ for _sigma in SIGMAS:
         seeds=SEEDS,
         resources=RESOURCES,
         arms=[_arms(_sigma)[1]],
-    )
-    sweep(
-        f"bounds_noise_s{int(round(_sigma * 10))}",
-        problem=dataclasses.replace(ERA5_SH_JUL2021, forecast="noisy", error_scale=_sigma),
-        horizon=HORIZON,
-        claim_every=CLAIM_EVERY,
-        recorded={**RECORDED, "objective_state/claim": CLAIM_EVERY},
-        seeds=SEEDS,
-        resources=RESOURCES,
-        arms=_arms(_sigma),
     )
 
 HORIZONS = (PLANNING_BUDGET, HORIZON)

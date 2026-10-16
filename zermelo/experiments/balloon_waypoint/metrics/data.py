@@ -149,7 +149,7 @@ def episode_legs(held: dict[str, Any], config: dict[str, Any]) -> dict[str, np.n
     """One row per finished waypoint leg: the move it ended at, the steps walked, the steps predicted, and whether it arrived"""
     method = config.get("method")
     if method is None:
-        return {name: np.zeros(0) for name in ("ended", "walked", "predicted", "arrived", "distance")}
+        return {name: np.zeros(0) for name in ("ended", "walked", "predicted", "arrived", "distance", "opening_gap", "closed")}
     budget = int(method["planner"]["max_steps"])
     since = held["agent_state/steps_since_waypoint"]  # (moves + 1,) zero on a replan and up one a move
     ends = np.flatnonzero(np.diff(since) < 0)  # the last snapshot of each waypoint leg, where the sawtooth drops
@@ -164,6 +164,8 @@ def episode_legs(held: dict[str, Any], config: dict[str, Any]) -> dict[str, np.n
         "predicted": held["agent_state/scores.predicted_step_cost"][ends],
         "arrived": (walked < budget).astype(float),  # a waypoint leg ends on arrival or on the budget: short means arrived
         "distance": inside[ends] - inside[ends - taken],  # summed distance to the waypoint over the moves of this leg
+        "opening_gap": apart[ends - taken],  # how far the waypoint was when the leg set out
+        "closed": 1.0 - apart[ends - 1] / np.maximum(apart[ends - taken], 1e-9),  # the share of that gap the leg took out
     }
 
 
