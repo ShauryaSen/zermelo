@@ -75,7 +75,6 @@ RESOURCES = Resources(
     partition="dean",
     constraint=None,
     array_parallelism=12,
-    account="kilian",
 )
 """One cell is about 70 s of flying after a two-minute compile, measured on dean-cpu-01 at sigma = 2.4, so an
 hour is about ten times what a cell needs. The three-arm sweeps carry the oracle and the 32-draw plan, which

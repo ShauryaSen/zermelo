@@ -175,12 +175,14 @@ A bound needs **one waypoint sequence shared by all three arms**, so that the na
 that differs. That is a change to how an arm is composed, not a sweep, and it is the separate experiment.
 The arms below are left defined and unregistered, ready for it.
 
-`SEEDS = range(32)`; resources are 4 cpus, 16 GB, 60 min, partition `dean`, account `kilian`.
+`SEEDS = range(32)`; resources are 4 cpus, 16 GB, 60 min, partition `dean`, account `dean`.
 
 **The account is not the partition.** `partition=dean` is what keeps the cells on `dean-compute-[01-02]` and
-`dean-cpu-01`; `account=kilian` is only who the time is charged to, and it is the sole association this user
-has (`sacctmgr show assoc where user=$USER`). Submitting under `account=dean` is refused with *Invalid
-account or account/partition combination*, which names the account first for a reason. Measured on `dean-cpu-01`, the
+`dean-cpu-01`; the account is only who the time is charged to. `sbatch` refuses a submission whose account
+the user is not associated with, as *Invalid account or account/partition combination* -- which names the
+account first for a reason. The account is now a field of the sweep's `resources` so it can be stated rather
+than assumed, but it stays `dean`: that is the right account for this work, and a user who cannot charge it
+needs the association, not a different account. Measured on `dean-cpu-01`, the
 eight seeds of `mpc_noise_s24` take **9 m 55 s end to end in one process** — a two-minute JAX compile and
 about 70 s a seed — so as a Slurm array the whole ladder finishes in minutes.
 
