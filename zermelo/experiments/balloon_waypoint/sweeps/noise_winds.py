@@ -29,17 +29,15 @@ from zermelo.experiments.balloon_waypoint.sweeps.era5_collect_continuous import 
     _method,
 )
 
-WINDS = (0, 4, 16)
-"""Draws from the belief averaged over per solve. Zero is the posterior mean alone, the paper's setting.
+WINDS = (0, 8)
+"""Draws from the belief averaged over per solve. Zero is the posterior mean alone, which is the paper's
+setting, against eight. Two arms rather than a spread: the question is whether sampling helps at all as the
+forecast decays, and two lines answer it. A third value would say whether the benefit saturates, which is
+only worth asking if there is a benefit"""
 
-Kept to three values and spaced wide: a draw happens at every one of the 80 moves, so the cost is roughly
-linear in this and the top arm sets the runtime of the whole sweep. Measure before adding a fourth:
-
-    time pixi run sweep balloon_waypoint winds_noise_s24
-"""
-
-SEEDS = range(16)
-"""Half of what the one-dimensional ladder uses, because this sweep is three arms wide at every level"""
+SEEDS = range(32)
+"""The same seeds as the one-dimensional ladder, so the `n0` arm reruns exactly what `mpc_noise_s*` ran and
+should reproduce it. That is a free check that the two sweeps are configured alike"""
 
 
 def _arm(n_winds: int) -> object:
