@@ -35,6 +35,8 @@ NOTATION = (
     (r"$\chi(\cdot)$", r"where a state sits in km: the chord on the sphere, then the altitude"),
     (r"$V$", r"the navigator's own cost, $\sum_t \|\chi(z_t, p_t) - \chi(x^\star_t)\|$, the resource charge at zero"),
     (r"$d_j(t)$", r"$\|\chi(z_t, p_t) - \chi(x^\star_j)\|$, how far leg $j$ stood from its waypoint at its move $t$"),
+    (r"$F$", r"legs that set out past the radius, $\{ j : d_j(1) > \rho \}$: the ones with something to fly"),
+    (r"$v_{\max}$, $h$", r"the fastest wind the record holds and the hours one move takes"),
     (r"$\Delta_t$", r"seconds inside the method's own call at move $t$"),
     (r"$t_{\mathrm{draw}}$, $t_{\mathrm{last}}$", r"wall clock at the draw of the instance and at the last move"),
     (r"$\mathrm{RSS}_t$", r"resident bytes of the process at move $t$, which several episodes may share"),
@@ -52,8 +54,11 @@ OUTCOME = (
 
 DIAGNOSTIC = (
     ("legs", "legs", r"J", 0, "none"),
-    ("arrival_rate", "arrived", r"\frac{1}{J} \sum_{j \leq J} \mathbf{1}[k_j < L]", 3, "max"),
-    ("gap_closed", "gap closed", r"\frac{1}{J} \sum_{j \leq J} \big(1 - d_j(k_j) / d_j(1)\big)", 3, "max"),
+    ("arrival_flown", "arrived", r"\frac{1}{|F|} \sum_{j \in F} \mathbf{1}[k_j < L]", 3, "max"),
+    ("gap_closed", "gap closed", r"\frac{1}{|F|} \sum_{j \in F} \big(1 - d_j(k_j) / d_j(1)\big)", 3, "max"),
+    ("flown_legs", "legs flown", r"|F|", 0, "none"),
+    ("unreachable", "out of reach", r"\frac{1}{J} \sum_{j \leq J} \mathbf{1}[d_j(1) > L \, h \, v_{\max}]", 3, "none"),
+    ("arrival_rate", "arrived, every leg", r"\frac{1}{J} \sum_{j \leq J} \mathbf{1}[k_j < L]", 3, "none"),
     ("opening_gap", "opening gap", r"\frac{1}{J} \sum_{j \leq J} d_j(1)", 0, "none"),
     ("summed_distance", "distance summed", r"V = \sum_{t > T_0} \|\chi(z_t, p_t) - \chi(x^\star_t)\|", 0, "min"),
     ("leg_distance", "distance a leg", r"\frac{1}{J} \sum_{j \leq J} \sum_{t \in j} d_j(t)", 0, "min"),
@@ -182,8 +187,12 @@ def write(
     )
     counted["arrival_rate"] = legs.groupby(["arm", "seed"])["arrived"].mean().to_numpy()
     counted["leg_distance"] = legs.groupby(["arm", "seed"])["distance"].mean().to_numpy()
-    counted["gap_closed"] = legs.groupby(["arm", "seed"])["closed"].mean().to_numpy()
     counted["opening_gap"] = legs.groupby(["arm", "seed"])["opening_gap"].mean().to_numpy()
+    counted["unreachable"] = legs.groupby(["arm", "seed"])["unreachable"].mean().to_numpy()
+    # a leg that began inside the radius flew nowhere, so it is not asked how much of the gap it closed
+    flown = legs[legs["flown"] > 0].groupby(["arm", "seed"])
+    restricted = flown.agg(gap_closed=("closed", "mean"), arrival_flown=("arrived", "mean"), flown_legs=("closed", "size")).reset_index()
+    counted = counted.merge(restricted, on=["arm", "seed"], how="left")
     diagnostics = (
         ended[["arm", "seed", "cells_visited", "altitude_changes", "fastest_wind_flown", "summed_distance"]]
         .merge(held, on=["arm", "seed"], how="left")

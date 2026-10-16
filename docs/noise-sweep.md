@@ -73,6 +73,12 @@ have been measured on the Southern Hemisphere record the config is still named f
 about 16% overconfident in amplitude, and 35% in variance, before any noise is added — the same at every
 level, so it shifts every line together rather than tilting the trend. Left as it is pending Shaurya.
 
+**The planner thinks everything is reachable.** The diagnostics report `reachable = 1.000` exactly: the
+value-iteration table puts every candidate within `L = 20` steps, the 6 500 km one included. That table is
+what the acquisition prices waypoints with, so the chooser sends the balloon after targets the continuous
+balloon has no range for. This is upstream of anything the noise sweep measures and is a question for the
+method, not something to patch here.
+
 **A mismatch worth naming.** The belief's altitude lengthscale of 3.0 levels assumes the forecast error is
 coherent up the column. The error injected in §6 is drawn *independently per altitude*. So the belief is
 mis-specified in exactly the direction that matters for a balloon, whose only lever is which level to fly.
@@ -214,9 +220,23 @@ The ladder is read on three numbers, in rising order of how much they are worth 
 
 | | | |
 |---|---|---|
-| `arrived` | share of legs inside the radius within the budget | binary, four draws an episode: noisy |
-| `V`, `distance a leg` | the navigator's own cost, in km | **absolute, so dominated by how far the waypoint was** |
-| `gap closed` | `1 − d_j(k_j) / d_j(1)` a leg, meaned | scale-free: the share of the opening gap taken out |
+| `gap closed` | `1 − d_j(k_j) / d_j(1)`, over legs that flew | **the number the ladder is read on** |
+| `arrived` | the same legs, reaching the radius inside the budget | binary, so noisier |
+| `legs flown`, `out of reach` | how many legs had something to measure, and how many could not have arrived | diagnostics of the chooser |
+| `V`, `distance a leg` | the navigator's own cost, in km | absolute, so dominated by how far the waypoint was |
+| `arrived, every leg` | arrival over all legs | kept only so the restriction is visible |
+
+**Only legs that set out past the arrival radius are scored.** `F = { j : d_j(1) > ρ }`. Two kinds of leg are
+excluded, for different reasons, and both were found in the σ = 2.4 records:
+
+- **Legs that never flew.** The acquisition sometimes picks a waypoint already inside the radius, so the leg
+  ends after one move having gone nowhere — and counts as an arrival. Seed 0's first leg: one move, 143 km
+  to 143 km. Of nine legs inspected across four seeds, four counted as arrivals and only **one** was a real
+  flight to a distant waypoint. Every arrival rate reported before this restriction is inflated this way.
+- **Legs that could not have arrived.** A leg has `L × h = 60 h`; at the fastest wind the record holds that
+  is about 3 700 km. Seed 2 was sent after a waypoint **6 500 km** off and sat flat at that distance for all
+  twenty moves, contributing about 250 000 km to `V` by itself — the whole of its heavy tail. These are
+  counted as `out of reach` rather than scored.
 
 **Why a scale-free number is needed at all.** At σ = 2.4 the summed distance measured 88 445 km with a
 standard deviation of 100 308 — wider than its own mean. The waypoint chooser is unconstrained here

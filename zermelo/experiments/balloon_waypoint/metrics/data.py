@@ -5,6 +5,7 @@ g                           the scalar the target reads off W at one candidate
 claim                       (mu_u, mu_v, log var_u, log var_v) at every candidate
 """
 
+import functools
 import json
 from collections import Counter
 from collections.abc import Sequence
@@ -149,7 +150,8 @@ def episode_legs(held: dict[str, Any], config: dict[str, Any]) -> dict[str, np.n
     """One row per finished waypoint leg: the move it ended at, the steps walked, the steps predicted, and whether it arrived"""
     method = config.get("method")
     if method is None:
-        return {name: np.zeros(0) for name in ("ended", "walked", "predicted", "arrived", "distance", "opening_gap", "closed")}
+        names = ("ended", "walked", "predicted", "arrived", "distance", "opening_gap", "closed", "flown", "unreachable")
+        return {name: np.zeros(0) for name in names}
     budget = int(method["planner"]["max_steps"])
     since = held["agent_state/steps_since_waypoint"]  # (moves + 1,) zero on a replan and up one a move
     ends = np.flatnonzero(np.diff(since) < 0)  # the last snapshot of each waypoint leg, where the sawtooth drops
@@ -166,6 +168,10 @@ def episode_legs(held: dict[str, Any], config: dict[str, Any]) -> dict[str, np.n
         "distance": inside[ends] - inside[ends - taken],  # summed distance to the waypoint over the moves of this leg
         "opening_gap": apart[ends - taken],  # how far the waypoint was when the leg set out
         "closed": 1.0 - apart[ends - 1] / np.maximum(apart[ends - taken], 1e-9),  # the share of that gap the leg took out
+        # a leg that set out already inside the radius had nothing to fly, and one sent past the record's own
+        # reach could not have arrived however it was flown: neither says anything about the navigator
+        "flown": (apart[ends - taken] > float(method["planner"]["radius"])).astype(float),
+        "unreachable": (apart[ends - taken] > _reach_km(config)).astype(float),
     }
 
 
@@ -180,6 +186,23 @@ def _geometry(config: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarra
     lat = latitude[0] + (latitude[1] - latitude[0]) * np.arange(len(latitude))
     lon = longitude[0] + (longitude[1] - longitude[0]) * np.arange(len(longitude))
     return lat, lon, altitude_km
+
+
+@functools.lru_cache(maxsize=4)
+def _fastest(path: str) -> float:
+    """The fastest wind anywhere in a record (m/s), which bounds how far a leg could ever be carried"""
+    with np.load(path) as npz:
+        return float(np.max(np.hypot(npz["u"], npz["v"])))
+
+
+def _reach_km(config: dict[str, Any]) -> float:
+    """How far a leg could be carried at best: its budget of steps, each of `step_hours`, at the fastest wind
+    the record holds. A waypoint further off than this could not have been reached however well it was flown"""
+    method = config.get("method")
+    if method is None:
+        return float("inf")
+    hours = float(method["planner"]["max_steps"]) * float(config["problem"]["step_hours"])
+    return hours * 3600.0 * _fastest(config["problem"]["wind_path"]) / 1000.0
 
 
 def _embedded(lat: Any, lon: Any, level: Any, altitude_km: np.ndarray) -> np.ndarray:
