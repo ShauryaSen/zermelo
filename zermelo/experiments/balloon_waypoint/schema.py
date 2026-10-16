@@ -132,6 +132,10 @@ class MethodConfig:
     opening_legs: int = MISSING
     """Waypoint legs of uniform random walking taken before the rule starts"""
 
+    open_loop: bool = False
+    """Whether the leg is solved once and flown out, rather than replanned every move. The value of the best
+    fixed plan under whatever the method believes; under an oracle belief, the hindsight bound"""
+
     navigator: Any | None = None
     """How a continuous balloon flies a leg, as a dotted path with its own arguments (None flies the planner's table on the grid)"""
 

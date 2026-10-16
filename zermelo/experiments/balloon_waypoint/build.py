@@ -13,7 +13,7 @@ from zermelo.experiments.balloon_waypoint.schema import RunConfig
 from zermelo.interface import Agent
 from zermelo.methods.random_agent import RandomAgent
 from zermelo.methods.waypoint_bo.acquisition import Acquisition
-from zermelo.methods.waypoint_bo.agent import GradientAgent, WaypointAgent, posterior_moments
+from zermelo.methods.waypoint_bo.agent import GradientAgent, OpenLoopAgent, WaypointAgent, posterior_moments
 from zermelo.methods.waypoint_bo.belief import BeliefKernel, GPBelief, OracleBelief
 from zermelo.problems.balloon import (
     GaussianError,
@@ -122,7 +122,8 @@ def assemble(cfg: RunConfig) -> Episode:
                 interpolate=lambda table: smoothed(table, grid, n_alt),
             )
         )
-        agent = (WaypointAgent if dynamics is None else GradientAgent)(
+        flying = WaypointAgent if dynamics is None else (OpenLoopAgent if cfg.method.open_loop else GradientAgent)
+        agent = flying(
             **flown,
             candidates=candidates,
             transition=transition,
