@@ -73,6 +73,17 @@ def _arms(sigma: float) -> list:
 
 
 for _sigma in SIGMAS:
+    # the controller alone at one noise level: what a day's run needs, and the middle line of the three
+    sweep(
+        f"mpc_noise_s{int(round(_sigma * 10))}",
+        problem=dataclasses.replace(ERA5_SH_JUL2021, forecast="noisy", error_scale=_sigma),
+        horizon=HORIZON,
+        claim_every=CLAIM_EVERY,
+        recorded={**RECORDED, "objective_state/claim": CLAIM_EVERY},
+        seeds=SEEDS,
+        resources=RESOURCES,
+        arms=[_arms(_sigma)[1]],
+    )
     sweep(
         f"bounds_noise_s{int(round(_sigma * 10))}",
         problem=dataclasses.replace(ERA5_SH_JUL2021, forecast="noisy", error_scale=_sigma),
